@@ -78,11 +78,32 @@ export function TerminalView({
         terminal.writeln(`\r\n[mutishell] 写入终端失败: ${String(error)}`);
       });
     });
+    const syncImeAnchor = () => {
+      const textarea = terminal.textarea;
+      if (!textarea || !terminal.element) return;
+      const screen = terminal.element.querySelector(".xterm-screen");
+      const screenRect = screen?.getBoundingClientRect();
+      if (!screenRect || screenRect.width <= 0 || screenRect.height <= 0) {
+        return;
+      }
+
+      const cellWidth = screenRect.width / Math.max(terminal.cols, 1);
+      const cellHeight = screenRect.height / Math.max(terminal.rows, 1);
+      textarea.style.left = `${terminal.buffer.active.cursorX * cellWidth}px`;
+      textarea.style.top = `${terminal.buffer.active.cursorY * cellHeight}px`;
+      textarea.style.width = `${Math.max(cellWidth, 16)}px`;
+      textarea.style.height = `${Math.max(cellHeight, 16)}px`;
+      textarea.style.lineHeight = `${cellHeight}px`;
+    };
+    const cursorDisposable = terminal.onCursorMove(syncImeAnchor);
+    const renderDisposable = terminal.onRender(syncImeAnchor);
+    terminal.textarea?.addEventListener("focus", syncImeAnchor);
 
     const fit = () => {
       try {
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
         fitAddon.fit();
+        syncImeAnchor();
         void resizeTerminal(tab.id, terminal.cols, terminal.rows);
       } catch {
         // xterm can throw if the element is detached during fast tab switching.
@@ -98,6 +119,9 @@ export function TerminalView({
 
     return () => {
       inputDisposable.dispose();
+      cursorDisposable.dispose();
+      renderDisposable.dispose();
+      terminal.textarea?.removeEventListener("focus", syncImeAnchor);
       resizeObserver.disconnect();
       onDispose(tab.id);
       terminal.dispose();

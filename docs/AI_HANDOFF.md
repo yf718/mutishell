@@ -121,6 +121,9 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Keep hidden terminal views mounted so scrollback survives tab switching.
 - Do not hide inactive xterm mounts with `display: none`; it can make fit
   measure a tiny width and shrink the PTY after switching projects.
+- Keep the xterm helper textarea anchored near the cursor for Windows IME.
+  Chinese input candidates can appear in the wrong screen location in WebView2
+  if the helper textarea keeps its off-screen default position.
 - Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
   `src/App.tsx`.
 

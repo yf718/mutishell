@@ -640,6 +640,22 @@ button {
   height: 100%;
 }
 
+.terminal-view.is-active .xterm .xterm-helpers {
+  z-index: 20;
+}
+
+.terminal-view.is-active .xterm .xterm-helper-textarea {
+  z-index: 20;
+}
+
+.terminal-view:not(.is-active) .xterm .xterm-helper-textarea {
+  pointer-events: none;
+}
+
+.terminal-view.is-active .xterm .composition-view {
+  z-index: 21;
+}
+
 .terminal-overlay {
   position: absolute;
   right: 18px;
