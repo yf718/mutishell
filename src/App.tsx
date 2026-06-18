@@ -513,7 +513,14 @@ export default function App() {
         const profiles = state.shellProfiles.length
           ? state.shellProfiles.map((profile) => {
               const fresh = freshProfiles.find((item) => item.id === profile.id);
-              return fresh ? { ...profile, detected: fresh.detected } : profile;
+              if (!fresh) return profile;
+              if (
+                profile.executable.trim().toLowerCase() !==
+                fresh.executable.trim().toLowerCase()
+              ) {
+                return profile;
+              }
+              return { ...profile, detected: fresh.detected };
             })
           : freshProfiles;
         const restoredTabs: RuntimeTab[] = state.tabs.map((tab) => ({

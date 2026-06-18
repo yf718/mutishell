@@ -98,6 +98,9 @@ Users can edit a profile executable path in the settings dialog. The edited
 profile is saved in `state.json` and passed back to Rust in
 `TerminalCreateRequest.shellProfile`. Do not change launch code to only use
 `default_shell_profiles()`, or custom Git Bash paths will stop working.
+When hydrating saved profiles in React, do not overwrite a custom executable's
+`detected` flag with the default profile detection result unless the executable
+paths match.
 
 Git Bash has one extra rule: `git-bash.exe` is a launcher and should be
 normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep

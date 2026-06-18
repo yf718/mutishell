@@ -234,6 +234,8 @@ fn get_shell_profiles() -> Vec<ShellProfile> {
 #[tauri::command]
 fn check_executable_path(path: String) -> bool {
     executable_exists(&path)
+        || normalize_git_bash_executable(&clean_executable_path(&path))
+            .is_some_and(|bash| executable_exists(&bash))
 }
 
 #[tauri::command]
