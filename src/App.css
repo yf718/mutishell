@@ -636,6 +636,10 @@ button {
   overflow: hidden;
 }
 
+.terminal-view.is-composing .terminal-mount {
+  padding-bottom: 58px;
+}
+
 .terminal-mount .xterm {
   height: 100%;
 }

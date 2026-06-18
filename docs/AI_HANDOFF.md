@@ -124,6 +124,9 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Keep the xterm helper textarea anchored near the cursor for Windows IME.
   Chinese input candidates can appear in the wrong screen location in WebView2
   if the helper textarea keeps its off-screen default position.
+- During IME composition, the terminal view temporarily reserves bottom space
+  and re-fits xterm so the Windows candidate bar is less likely to cover the
+  prompt near the bottom edge.
 - Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
   `src/App.tsx`.
 

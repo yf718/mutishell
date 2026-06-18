@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -18,6 +18,7 @@ export function TerminalView({
   onReady,
   onDispose,
 }: TerminalViewProps) {
+  const [composing, setComposing] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -89,16 +90,20 @@ export function TerminalView({
 
       const cellWidth = screenRect.width / Math.max(terminal.cols, 1);
       const cellHeight = screenRect.height / Math.max(terminal.rows, 1);
+      const cursorY = terminal.buffer.active.cursorY;
+      const bottomReserve = 48;
+      const bottomOverflow =
+        cursorY * cellHeight + cellHeight + bottomReserve - screenRect.height;
+      const top = Math.max(
+        0,
+        cursorY * cellHeight - Math.max(0, bottomOverflow),
+      );
       textarea.style.left = `${terminal.buffer.active.cursorX * cellWidth}px`;
-      textarea.style.top = `${terminal.buffer.active.cursorY * cellHeight}px`;
+      textarea.style.top = `${top}px`;
       textarea.style.width = `${Math.max(cellWidth, 16)}px`;
       textarea.style.height = `${Math.max(cellHeight, 16)}px`;
       textarea.style.lineHeight = `${cellHeight}px`;
     };
-    const cursorDisposable = terminal.onCursorMove(syncImeAnchor);
-    const renderDisposable = terminal.onRender(syncImeAnchor);
-    terminal.textarea?.addEventListener("focus", syncImeAnchor);
-
     const fit = () => {
       try {
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
@@ -109,6 +114,26 @@ export function TerminalView({
         // xterm can throw if the element is detached during fast tab switching.
       }
     };
+    const cursorDisposable = terminal.onCursorMove(syncImeAnchor);
+    const renderDisposable = terminal.onRender(syncImeAnchor);
+    terminal.textarea?.addEventListener("focus", syncImeAnchor);
+    const handleCompositionStart = () => {
+      setComposing(true);
+      window.requestAnimationFrame(fit);
+      window.setTimeout(fit, 40);
+    };
+    const handleCompositionUpdate = () => {
+      syncImeAnchor();
+      window.requestAnimationFrame(syncImeAnchor);
+    };
+    const handleCompositionEnd = () => {
+      setComposing(false);
+      window.requestAnimationFrame(fit);
+      window.setTimeout(fit, 40);
+    };
+    terminal.textarea?.addEventListener("compositionstart", handleCompositionStart);
+    terminal.textarea?.addEventListener("compositionupdate", handleCompositionUpdate);
+    terminal.textarea?.addEventListener("compositionend", handleCompositionEnd);
 
     const resizeObserver = new ResizeObserver(() => {
       window.requestAnimationFrame(fit);
@@ -122,6 +147,18 @@ export function TerminalView({
       cursorDisposable.dispose();
       renderDisposable.dispose();
       terminal.textarea?.removeEventListener("focus", syncImeAnchor);
+      terminal.textarea?.removeEventListener(
+        "compositionstart",
+        handleCompositionStart,
+      );
+      terminal.textarea?.removeEventListener(
+        "compositionupdate",
+        handleCompositionUpdate,
+      );
+      terminal.textarea?.removeEventListener(
+        "compositionend",
+        handleCompositionEnd,
+      );
       resizeObserver.disconnect();
       onDispose(tab.id);
       terminal.dispose();
@@ -168,7 +205,13 @@ export function TerminalView({
 
   return (
     <div
-      className={active ? "terminal-view is-active" : "terminal-view"}
+      className={[
+        "terminal-view",
+        active ? "is-active" : "",
+        composing ? "is-composing" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       aria-hidden={!active}
     >
       <div className="terminal-mount" ref={containerRef} />
