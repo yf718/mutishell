@@ -451,16 +451,28 @@ export default function App() {
     );
   }, [activeTab]);
 
-  const registerTerminal = useCallback(
-    (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => {
-      terminalRefs.current.set(terminalId, terminal);
-      fitAddonRefs.current.set(terminalId, fitAddon);
+  const ensureTerminalStarted = useCallback(
+    (terminalId: string) => {
       const tab = tabsRef.current.find((item) => item.id === terminalId);
-      if (tab && tab.status === "idle") {
+      if (
+        tab?.status === "idle" &&
+        terminalRefs.current.has(terminalId) &&
+        !startedTerminals.current.has(terminalId)
+      ) {
         void startTerminal(tab);
       }
     },
     [startTerminal],
+  );
+
+  const registerTerminal = useCallback(
+    (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => {
+      terminalRefs.current.set(terminalId, terminal);
+      fitAddonRefs.current.set(terminalId, fitAddon);
+      ensureTerminalStarted(terminalId);
+      window.setTimeout(() => ensureTerminalStarted(terminalId), 0);
+    },
+    [ensureTerminalStarted],
   );
 
   const unregisterTerminal = useCallback((terminalId: string) => {
@@ -504,6 +516,18 @@ export default function App() {
               return fresh ? { ...profile, detected: fresh.detected } : profile;
             })
           : freshProfiles;
+        const restoredTabs: RuntimeTab[] = state.tabs.map((tab) => ({
+          ...tab,
+          status: "idle",
+        }));
+        const restoredTabIds = new Set(restoredTabs.map((tab) => tab.id));
+        const restoredActiveTabs = Object.fromEntries(
+          Object.entries(state.activeTabByProject ?? {}).filter(([, tabId]) =>
+            restoredTabIds.has(tabId),
+          ),
+        );
+        tabsRef.current = restoredTabs;
+        shellProfilesRef.current = profiles;
         setShellProfiles(profiles);
         setDefaultShellProfileId(
           state.defaultShellProfileId ||
@@ -511,18 +535,13 @@ export default function App() {
             "powershell",
         );
         setProjects(state.projects);
-        setTabs(
-          state.tabs.map((tab) => ({
-            ...tab,
-            status: "idle",
-          })),
-        );
+        setTabs(restoredTabs);
         setActiveProjectId(
           state.activeProjectId ??
             state.projects[0]?.id ??
             null,
         );
-        setActiveTabByProject(state.activeTabByProject ?? {});
+        setActiveTabByProject(restoredActiveTabs);
         setSidebarWidth(clampSidebarWidth(state.sidebarWidth ?? 260));
         setTheme(state.theme ?? "dark");
         setHydrated(true);
@@ -550,6 +569,19 @@ export default function App() {
   useEffect(() => {
     shellProfilesRef.current = shellProfiles;
   }, [shellProfiles]);
+
+  useEffect(() => {
+    if (!hydrated || shellProfiles.length === 0) return;
+    for (const tab of tabs) {
+      if (
+        tab.status === "idle" &&
+        terminalRefs.current.has(tab.id) &&
+        !startedTerminals.current.has(tab.id)
+      ) {
+        ensureTerminalStarted(tab.id);
+      }
+    }
+  }, [ensureTerminalStarted, hydrated, shellProfiles.length, tabs]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -955,7 +987,13 @@ export default function App() {
                   </button>
                 </div>
               )}
-              </div>
+              {activeTab?.status === "starting" && (
+                <div className="terminal-overlay subtle">
+                  <strong>正在恢复终端...</strong>
+                  <span>{activeTab.title}</span>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="welcome">

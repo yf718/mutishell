@@ -669,6 +669,12 @@ button {
   color: #ffffff;
 }
 
+.terminal-overlay.subtle {
+  max-width: 320px;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(17, 19, 24, 0.78);
+}
+
 .welcome,
 .empty-workspace {
   display: flex;

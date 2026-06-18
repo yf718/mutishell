@@ -107,6 +107,9 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 
 - xterm can throw if `fit()` runs while the element is detached.
 - Do not call `terminal_create` before xterm is mounted.
+- Restored tabs must be started idempotently after both xterm and saved tabs are
+  ready. Do not rely only on `TerminalView.onReady`; it can fire before React
+  refs have the hydrated tab list.
 - Strip the Windows `\\?\` prefix before passing cwd to shells. CMD rejects it
   and falls back to `C:\Windows`.
 - Closing a tab should call `terminal_close`.
