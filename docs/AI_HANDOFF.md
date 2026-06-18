@@ -19,7 +19,8 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 - Restore saved projects and terminal tabs after app restart.
 - Restart or close terminal tabs.
 - Drag the sidebar divider to persist a custom sidebar width.
-- Scroll and drag-sort the project list. Sorting is disabled while search is active.
+- Scroll and sort the project list by dragging the row handle. Sorting is
+  disabled while search is active.
 - Toggle and persist light/dark UI theme.
 - Save state automatically with a short debounce.
 
@@ -98,6 +99,10 @@ profile is saved in `state.json` and passed back to Rust in
 `TerminalCreateRequest.shellProfile`. Do not change launch code to only use
 `default_shell_profiles()`, or custom Git Bash paths will stop working.
 
+Git Bash has one extra rule: `git-bash.exe` is a launcher and should be
+normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
+`--login -i` for interactive sessions.
+
 ## Terminal Bugs To Watch
 
 - xterm can throw if `fit()` runs while the element is detached.
@@ -108,8 +113,17 @@ profile is saved in `state.json` and passed back to Rust in
 - Restart should remove the tab id from `startedTerminals`.
 - PTY output must be routed by `terminalId`; never broadcast output to all tabs.
 - Keep hidden terminal views mounted so scrollback survives tab switching.
+- Do not hide inactive xterm mounts with `display: none`; it can make fit
+  measure a tiny width and shrink the PTY after switching projects.
 - Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
   `src/App.tsx`.
+
+## Packaging
+
+The default bundle target is NSIS only in `src-tauri/tauri.conf.json`. Avoid
+switching back to `targets: "all"` casually; on Windows the MSI and NSIS
+patching steps can briefly contend for `target\release\mutishell.exe` and emit
+`os error 32`.
 
 ## Safe Next Features
 

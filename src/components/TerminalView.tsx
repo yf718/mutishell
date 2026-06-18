@@ -21,6 +21,11 @@ export function TerminalView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const activeRef = useRef(active);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -76,6 +81,7 @@ export function TerminalView({
 
     const fit = () => {
       try {
+        if (container.clientWidth < 40 || container.clientHeight < 40) return;
         fitAddon.fit();
         void resizeTerminal(tab.id, terminal.cols, terminal.rows);
       } catch {
@@ -105,21 +111,35 @@ export function TerminalView({
       return;
     }
 
-    window.requestAnimationFrame(() => {
+    const fit = () => {
       try {
-        fitAddonRef.current?.fit();
-        terminalRef.current?.focus();
-        if (terminalRef.current) {
-          void resizeTerminal(
-            tab.id,
-            terminalRef.current.cols,
-            terminalRef.current.rows,
-          );
+        if (!activeRef.current) return;
+        const fitAddon = fitAddonRef.current;
+        const terminal = terminalRef.current;
+        const container = containerRef.current;
+        if (
+          !fitAddon ||
+          !terminal ||
+          !container ||
+          container.clientWidth < 40 ||
+          container.clientHeight < 40
+        ) {
+          return;
         }
+        fitAddon.fit();
+        terminal.focus();
+        void resizeTerminal(tab.id, terminal.cols, terminal.rows);
       } catch {
         // Ignore transient layout reads while React is switching views.
       }
-    });
+    };
+
+    const frameId = window.requestAnimationFrame(fit);
+    const timeoutIds = [window.setTimeout(fit, 60), window.setTimeout(fit, 180)];
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      timeoutIds.forEach((id) => window.clearTimeout(id));
+    };
   }, [active, tab.id]);
 
   return (

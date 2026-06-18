@@ -273,7 +273,8 @@ fn terminal_create(
         .unwrap_or(default_profile);
 
     let cwd = normalize_existing_dir(&request.cwd)?;
-    let executable = clean_executable_path(&profile.executable);
+    let launch = resolve_shell_launch(&profile);
+    let executable = launch.executable;
     if !executable_exists(&executable) {
         return Err(format!(
             "Shell '{}' was not found at '{}'",
@@ -294,7 +295,7 @@ fn terminal_create(
         .map_err(|err| format!("Failed to open PTY: {err}"))?;
 
     let mut command = CommandBuilder::new(&executable);
-    for arg in &profile.args {
+    for arg in &launch.args {
         command.arg(arg);
     }
     command.cwd(&cwd);
@@ -557,6 +558,56 @@ fn path_to_string(path: PathBuf) -> String {
 
 fn clean_executable_path(path: &str) -> String {
     clean_windows_path(path.trim().trim_matches('"'))
+}
+
+struct ShellLaunch {
+    executable: String,
+    args: Vec<String>,
+}
+
+fn resolve_shell_launch(profile: &ShellProfile) -> ShellLaunch {
+    let executable = clean_executable_path(&profile.executable);
+    let args = if profile.id == "git-bash" {
+        ensure_git_bash_args(&profile.args)
+    } else {
+        profile.args.clone()
+    };
+
+    ShellLaunch {
+        executable: normalize_git_bash_executable(&executable).unwrap_or(executable),
+        args,
+    }
+}
+
+fn ensure_git_bash_args(args: &[String]) -> Vec<String> {
+    if args.iter().any(|arg| arg == "--login") && args.iter().any(|arg| arg == "-i") {
+        return args.to_vec();
+    }
+
+    let mut next = args.to_vec();
+    if !next.iter().any(|arg| arg == "--login") {
+        next.push("--login".to_string());
+    }
+    if !next.iter().any(|arg| arg == "-i") {
+        next.push("-i".to_string());
+    }
+    next
+}
+
+fn normalize_git_bash_executable(executable: &str) -> Option<String> {
+    let path = Path::new(executable);
+    let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    if file_name != "git-bash.exe" {
+        return None;
+    }
+
+    let git_root = path.parent()?;
+    let bash = git_root.join("bin").join("bash.exe");
+    if bash.exists() {
+        return Some(path_to_string(bash));
+    }
+
+    None
 }
 
 fn clean_windows_path(path: &str) -> String {

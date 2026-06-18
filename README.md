@@ -10,7 +10,7 @@ The first MVP focuses on one workflow:
 3. Support PowerShell, PowerShell 7, CMD, Git Bash, and WSL profiles.
 4. Remember projects, tabs, active project, active tab, sidebar width, and theme before closing.
 5. Restore the previous workspace on the next launch.
-6. Scroll and drag-sort the project list when many folders are configured.
+6. Scroll and reorder projects with the drag handle when many folders are configured.
 
 ## Tech Stack
 
@@ -89,6 +89,10 @@ Desktop package build:
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 npm run tauri build
 ```
+
+The default bundle target is NSIS only. Building both MSI and NSIS in the same
+run can make Windows briefly lock the release executable while Tauri patches
+bundle metadata.
 
 ## Project Structure
 
@@ -186,6 +190,11 @@ The app detects whether the executable exists. Profile executable paths can be
 edited in the settings dialog, validated with the `check_executable_path` Tauri
 command, and persisted in `state.json`.
 
+For Git Bash, users may enter either `bin\bash.exe` or the Git for Windows
+launcher `git-bash.exe`. Launch code normalizes `git-bash.exe` to the sibling
+`bin\bash.exe` and ensures `--login -i` is present, because the launcher opens
+its own window and exits instead of staying attached to the embedded PTY.
+
 When launching a terminal, the frontend sends the saved `ShellProfile` to Rust.
 This is important because users may install Git Bash outside
 `C:\Program Files\Git`.
@@ -196,8 +205,11 @@ This is important because users may install Git Bash outside
 - Keep frontend data contracts in `src/types.ts`.
 - Avoid storing terminal process state in React. Rust owns live PTY processes.
 - React owns user workspace state: projects, tabs, active selections, sidebar width, and theme.
-- Project order is the array order in `projects`; drag sorting mutates this
-  array and is disabled while filtering via search.
+- Project order is the array order in `projects`; handle-based sorting mutates
+  this array and is disabled while filtering via search.
+- Keep inactive terminal views mounted but hidden with visibility/opacity, not
+  `display: none`; xterm fit can mis-measure hidden terminals and shrink the
+  backend PTY if the mount has no real size.
 - Add new Rust commands to `invoke_handler` and expose matching wrappers in
   `tauriApi.ts`.
 - If splitting `App.tsx`, move project/tab mutations into a small store first,

@@ -4,6 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 import {
   ChevronDown,
   Circle,
+  GripVertical,
   Moon,
   Folder,
   FolderOpen,
@@ -31,6 +32,7 @@ import {
   openPathInExplorer,
   pickProjectDirectory,
   saveAppState,
+  resizeTerminal,
 } from "./services/tauriApi";
 import type {
   AppStateFile,
@@ -125,6 +127,9 @@ export default function App() {
   const tabsRef = useRef<RuntimeTab[]>([]);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
   const draggedProjectId = useRef<string | null>(null);
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(
+    null,
+  );
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -348,28 +353,59 @@ export default function App() {
     });
   }, []);
 
-  const startProjectDrag = useCallback(
+  const startProjectSort = useCallback(
     (
-      event: React.DragEvent<HTMLDivElement>,
+      event: React.PointerEvent<HTMLSpanElement>,
       projectId: string,
     ) => {
-      if (!projectSortingEnabled) {
-        event.preventDefault();
-        return;
-      }
-      draggedProjectId.current = projectId;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", projectId);
-    },
-    [projectSortingEnabled],
-  );
+      if (!projectSortingEnabled || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
 
-  const reorderProjectOnEnter = useCallback(
-    (targetId: string) => {
-      if (!projectSortingEnabled) return;
-      const sourceId = draggedProjectId.current;
-      if (!sourceId || sourceId === targetId) return;
-      moveProject(sourceId, targetId);
+      const handle = event.currentTarget;
+      const pointerId = event.pointerId;
+      draggedProjectId.current = projectId;
+      setDraggingProjectId(projectId);
+
+      try {
+        handle.setPointerCapture(pointerId);
+      } catch {
+        // Some WebView edge cases do not support capture on this element.
+      }
+
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        moveEvent.preventDefault();
+        const sourceId = draggedProjectId.current;
+        if (!sourceId) return;
+
+        const element = document.elementFromPoint(
+          moveEvent.clientX,
+          moveEvent.clientY,
+        );
+        const projectElement = element?.closest("[data-project-id]") as
+          | HTMLElement
+          | null;
+        const targetId = projectElement?.dataset.projectId;
+        if (!targetId || targetId === sourceId) return;
+        moveProject(sourceId, targetId);
+      };
+
+      const finishSort = () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", finishSort);
+        window.removeEventListener("pointercancel", finishSort);
+        draggedProjectId.current = null;
+        setDraggingProjectId(null);
+        try {
+          handle.releasePointerCapture(pointerId);
+        } catch {
+          // Capture may already be released by the WebView.
+        }
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", finishSort, { once: true });
+      window.addEventListener("pointercancel", finishSort, { once: true });
     },
     [moveProject, projectSortingEnabled],
   );
@@ -431,6 +467,27 @@ export default function App() {
     terminalRefs.current.delete(terminalId);
     fitAddonRefs.current.delete(terminalId);
   }, []);
+
+  const fitActiveTerminal = useCallback(() => {
+    if (!activeTab) return;
+    const terminal = terminalRefs.current.get(activeTab.id);
+    const fitAddon = fitAddonRefs.current.get(activeTab.id);
+    if (!terminal || !fitAddon) return;
+
+    const fit = () => {
+      try {
+        fitAddon.fit();
+        terminal.focus();
+        void resizeTerminal(activeTab.id, terminal.cols, terminal.rows);
+      } catch {
+        // The terminal may not be visible yet.
+      }
+    };
+
+    window.requestAnimationFrame(fit);
+    window.setTimeout(fit, 60);
+    window.setTimeout(fit, 180);
+  }, [activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -570,19 +627,8 @@ export default function App() {
   }, [activeProjectId]);
 
   useEffect(() => {
-    if (!activeTab) return;
-    const terminal = terminalRefs.current.get(activeTab.id);
-    const fitAddon = fitAddonRefs.current.get(activeTab.id);
-    if (!terminal || !fitAddon) return;
-    window.requestAnimationFrame(() => {
-      try {
-        fitAddon.fit();
-        terminal.focus();
-      } catch {
-        // The terminal may not be visible yet.
-      }
-    });
-  }, [activeTab]);
+    fitActiveTerminal();
+  }, [activeProjectId, activeTabId, fitActiveTerminal, sidebarWidth]);
 
   if (!hydrated) {
     return (
@@ -647,24 +693,14 @@ export default function App() {
               ).length;
               return (
                 <div
-                  className={active ? "project-item active" : "project-item"}
-                  draggable={projectSortingEnabled}
-                  onDragEnd={() => {
-                    draggedProjectId.current = null;
-                  }}
-                  onDragEnter={() => reorderProjectOnEnter(project.id)}
-                  onDragOver={(event) => {
-                    if (!projectSortingEnabled) return;
-                    event.preventDefault();
-                  }}
-                  onDragStart={(event) => startProjectDrag(event, project.id)}
-                  onDrop={(event) => {
-                    if (!projectSortingEnabled) return;
-                    event.preventDefault();
-                    const sourceId = event.dataTransfer.getData("text/plain");
-                    draggedProjectId.current = null;
-                    if (sourceId) moveProject(sourceId, project.id);
-                  }}
+                  className={[
+                    "project-item",
+                    active ? "active" : "",
+                    draggingProjectId === project.id ? "sorting" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  data-project-id={project.id}
                   key={project.id}
                   onClick={() => setActiveProjectId(project.id)}
                   onKeyDown={(event) => {
@@ -680,6 +716,20 @@ export default function App() {
                   {active ? <FolderOpen size={17} /> : <Folder size={17} />}
                   <span>{project.name}</span>
                   {count > 0 && <em>{count}</em>}
+                  <span
+                    className="project-drag-handle"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) =>
+                      startProjectSort(event, project.id)
+                    }
+                    title={
+                      projectSortingEnabled
+                        ? "按住拖动排序"
+                        : "清空搜索后可排序"
+                    }
+                  >
+                    <GripVertical size={15} />
+                  </span>
                 </div>
               );
             })
