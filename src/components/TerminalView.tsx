@@ -102,7 +102,7 @@ export function TerminalView({
 
       const cellWidth = screenRect.width / Math.max(terminal.cols, 1);
       const cellHeight = screenRect.height / Math.max(terminal.rows, 1);
-      const dockAnchorRect = activeRef.current
+      const dockAnchorRect = composingRef.current
         ? imeDockAnchorRef.current?.getBoundingClientRect()
         : undefined;
       const cursorX = Math.min(
