@@ -19,6 +19,7 @@ import "./App.css";
 import { TerminalView } from "./components/TerminalView";
 import {
   closeTerminal,
+  checkExecutablePath,
   createTerminal,
   getHomeDir,
   getShellProfiles,
@@ -105,6 +106,7 @@ export default function App() {
   const startedTerminals = useRef(new Set<string>());
   const saveTimer = useRef<number | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
+  const shellProfilesRef = useRef<ShellProfile[]>([]);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -179,11 +181,15 @@ export default function App() {
 
       try {
         const terminal = terminalRefs.current.get(tab.id);
+        const shellProfile = shellProfilesRef.current.find(
+          (profile) => profile.id === tab.shellProfileId,
+        );
         const cols = terminal?.cols || 100;
         const rows = terminal?.rows || 30;
         await createTerminal({
           terminalId: tab.id,
           shellProfileId: tab.shellProfileId,
+          shellProfile,
           cwd: tab.cwd,
           title: tab.title,
           cols,
@@ -415,6 +421,10 @@ export default function App() {
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  useEffect(() => {
+    shellProfilesRef.current = shellProfiles;
+  }, [shellProfiles]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -752,6 +762,7 @@ export default function App() {
           defaultShellProfileId={defaultShellProfileId}
           onClose={() => setSettingsOpen(false)}
           onDefaultChange={setDefaultShellProfileId}
+          onProfilesChange={setShellProfiles}
           onRemoveProject={removeProject}
           projects={projects}
           shellProfiles={shellProfiles}
@@ -767,6 +778,7 @@ type SettingsDialogProps = {
   projects: Project[];
   onClose: () => void;
   onDefaultChange: (id: string) => void;
+  onProfilesChange: (profiles: ShellProfile[]) => void;
   onRemoveProject: (projectId: string) => void;
 };
 
@@ -776,13 +788,70 @@ function SettingsDialog({
   projects,
   onClose,
   onDefaultChange,
+  onProfilesChange,
   onRemoveProject,
 }: SettingsDialogProps) {
   const [homeDir, setHomeDir] = useState("");
+  const [defaultProfiles, setDefaultProfiles] = useState<ShellProfile[]>([]);
+  const [draftProfiles, setDraftProfiles] = useState<ShellProfile[]>(shellProfiles);
+  const [checkingProfileId, setCheckingProfileId] = useState<string | null>(null);
 
   useEffect(() => {
     void getHomeDir().then(setHomeDir).catch(() => undefined);
+    void getShellProfiles().then(setDefaultProfiles).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    setDraftProfiles(shellProfiles);
+  }, [shellProfiles]);
+
+  const updateProfilePath = (profileId: string, executable: string) => {
+    setDraftProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId ? { ...profile, executable } : profile,
+      ),
+    );
+  };
+
+  const validateProfile = async (profileId: string) => {
+    const profile = draftProfiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    setCheckingProfileId(profileId);
+    const detected = await checkExecutablePath(profile.executable).catch(
+      () => false,
+    );
+    setDraftProfiles((current) =>
+      current.map((item) =>
+        item.id === profileId ? { ...item, detected } : item,
+      ),
+    );
+    setCheckingProfileId(null);
+  };
+
+  const restoreProfile = (profileId: string) => {
+    const profile = defaultProfiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    setDraftProfiles((current) =>
+      current.map((item) => (item.id === profileId ? profile : item)),
+    );
+  };
+
+  const applySettings = () => {
+    const nextProfiles = draftProfiles.map((profile) => ({
+      ...profile,
+      executable: profile.executable.trim(),
+    }));
+    onProfilesChange(nextProfiles);
+    const defaultProfile = nextProfiles.find(
+      (profile) => profile.id === defaultShellProfileId,
+    );
+    if (!defaultProfile?.detected) {
+      onDefaultChange(
+        nextProfiles.find((profile) => profile.detected)?.id ?? "powershell",
+      );
+    }
+    onClose();
+  };
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -801,8 +870,8 @@ function SettingsDialog({
           <section>
             <h2>Shell Profiles</h2>
             <div className="profile-list">
-              {shellProfiles.map((profile) => (
-                <label className="profile-row" key={profile.id}>
+              {draftProfiles.map((profile) => (
+                <div className="profile-row" key={profile.id}>
                   <input
                     checked={defaultShellProfileId === profile.id}
                     disabled={!profile.detected}
@@ -812,12 +881,36 @@ function SettingsDialog({
                   />
                   <div>
                     <strong>{profile.name}</strong>
-                    <span>{profile.executable}</span>
+                    <input
+                      className="path-input"
+                      onChange={(event) =>
+                        updateProfilePath(profile.id, event.target.value)
+                      }
+                      onBlur={() => void validateProfile(profile.id)}
+                      value={profile.executable}
+                    />
+                    <div className="profile-tools">
+                      <button
+                        onClick={() => void validateProfile(profile.id)}
+                        type="button"
+                      >
+                        {checkingProfileId === profile.id ? "检测中" : "检测"}
+                      </button>
+                      <button
+                        disabled={
+                          !defaultProfiles.some((item) => item.id === profile.id)
+                        }
+                        onClick={() => restoreProfile(profile.id)}
+                        type="button"
+                      >
+                        恢复默认
+                      </button>
+                    </div>
                   </div>
                   <em className={profile.detected ? "ok" : "missing"}>
                     {profile.detected ? "可用" : "未找到"}
                   </em>
-                </label>
+                </div>
               ))}
             </div>
           </section>
@@ -851,7 +944,7 @@ function SettingsDialog({
         </div>
 
         <footer>
-          <button className="primary-button" onClick={onClose} type="button">
+          <button className="primary-button" onClick={applySettings} type="button">
             完成
           </button>
         </footer>

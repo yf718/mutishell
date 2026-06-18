@@ -179,8 +179,13 @@ Default profiles are generated in Rust:
 - `git-bash`: Git Bash
 - `wsl`: WSL
 
-The MVP detects whether the executable exists. Editing custom profile paths is
-not implemented yet, but the data model already supports profile persistence.
+The app detects whether the executable exists. Profile executable paths can be
+edited in the settings dialog, validated with the `check_executable_path` Tauri
+command, and persisted in `state.json`.
+
+When launching a terminal, the frontend sends the saved `ShellProfile` to Rust.
+This is important because users may install Git Bash outside
+`C:\Program Files\Git`.
 
 ## Design Notes For Future AI Changes
 
@@ -200,7 +205,7 @@ not implemented yet, but the data model already supports profile persistence.
 ## Known MVP Limits
 
 - No split panes yet.
-- No custom shell profile editor yet.
+- Shell profile path editing exists, but adding/removing profiles is not exposed yet.
 - No terminal output persistence.
 - No drag reorder for project items or tabs.
 - No SSH manager.

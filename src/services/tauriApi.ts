@@ -22,6 +22,10 @@ export function getShellProfiles(): Promise<ShellProfile[]> {
   return invoke("get_shell_profiles");
 }
 
+export function checkExecutablePath(path: string): Promise<boolean> {
+  return invoke("check_executable_path", { path });
+}
+
 export function getHomeDir(): Promise<string> {
   return invoke("get_home_dir");
 }

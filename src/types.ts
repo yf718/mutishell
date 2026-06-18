@@ -37,6 +37,7 @@ export type AppStateFile = {
 export type TerminalCreateRequest = {
   terminalId?: string;
   shellProfileId: string;
+  shellProfile?: ShellProfile;
   cwd: string;
   title?: string;
   cols?: number;

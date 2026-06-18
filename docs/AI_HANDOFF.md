@@ -85,10 +85,17 @@ Required fields:
 
 Keep profile IDs stable because saved tabs reference `shellProfileId`.
 
+Users can edit a profile executable path in the settings dialog. The edited
+profile is saved in `state.json` and passed back to Rust in
+`TerminalCreateRequest.shellProfile`. Do not change launch code to only use
+`default_shell_profiles()`, or custom Git Bash paths will stop working.
+
 ## Terminal Bugs To Watch
 
 - xterm can throw if `fit()` runs while the element is detached.
 - Do not call `terminal_create` before xterm is mounted.
+- Strip the Windows `\\?\` prefix before passing cwd to shells. CMD rejects it
+  and falls back to `C:\Windows`.
 - Closing a tab should call `terminal_close`.
 - Restart should remove the tab id from `startedTerminals`.
 - PTY output must be routed by `terminalId`; never broadcast output to all tabs.

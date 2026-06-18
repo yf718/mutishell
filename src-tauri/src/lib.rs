@@ -70,6 +70,7 @@ pub struct AppStateFile {
 pub struct TerminalCreateRequest {
     pub terminal_id: Option<String>,
     pub shell_profile_id: String,
+    pub shell_profile: Option<ShellProfile>,
     pub cwd: String,
     pub title: Option<String>,
     pub cols: Option<u16>,
@@ -183,16 +184,29 @@ fn load_app_state() -> AppResult<AppStateFile> {
     let detected_profiles = default_shell_profiles();
     for profile in &mut state.shell_profiles {
         if let Some(detected) = detected_profiles.iter().find(|item| item.id == profile.id) {
-            profile.detected = executable_exists(&profile.executable);
             if profile.executable.trim().is_empty() {
                 profile.executable = detected.executable.clone();
             }
         }
+        profile.detected = executable_exists(&profile.executable);
     }
 
     if state.shell_profiles.is_empty() {
         state.shell_profiles = detected_profiles;
         state.default_shell_profile_id = default_shell_id(&state.shell_profiles);
+    } else {
+        for detected in detected_profiles {
+            if !state.shell_profiles.iter().any(|item| item.id == detected.id) {
+                state.shell_profiles.push(detected);
+            }
+        }
+        if !state
+            .shell_profiles
+            .iter()
+            .any(|item| item.id == state.default_shell_profile_id && item.detected)
+        {
+            state.default_shell_profile_id = default_shell_id(&state.shell_profiles);
+        }
     }
 
     Ok(state)
@@ -211,6 +225,11 @@ fn save_app_state(state: AppStateFile) -> AppResult<()> {
 #[tauri::command]
 fn get_shell_profiles() -> Vec<ShellProfile> {
     default_shell_profiles()
+}
+
+#[tauri::command]
+fn check_executable_path(path: String) -> bool {
+    executable_exists(&path)
 }
 
 #[tauri::command]
@@ -240,17 +259,21 @@ fn terminal_create(
         .terminal_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let profiles = default_shell_profiles();
-    let profile = profiles
+    let default_profile = default_shell_profiles()
         .into_iter()
         .find(|item| item.id == request.shell_profile_id)
         .ok_or_else(|| format!("Unknown shell profile '{}'", request.shell_profile_id))?;
+    let profile = request
+        .shell_profile
+        .filter(|profile| profile.id == request.shell_profile_id)
+        .unwrap_or(default_profile);
 
     let cwd = normalize_existing_dir(&request.cwd)?;
-    if !executable_exists(&profile.executable) {
+    let executable = clean_executable_path(&profile.executable);
+    if !executable_exists(&executable) {
         return Err(format!(
             "Shell '{}' was not found at '{}'",
-            profile.name, profile.executable
+            profile.name, executable
         ));
     }
 
@@ -266,7 +289,7 @@ fn terminal_create(
         })
         .map_err(|err| format!("Failed to open PTY: {err}"))?;
 
-    let mut command = CommandBuilder::new(&profile.executable);
+    let mut command = CommandBuilder::new(&executable);
     for arg in &profile.args {
         command.arg(arg);
     }
@@ -375,6 +398,7 @@ pub fn run() {
             load_app_state,
             save_app_state,
             get_shell_profiles,
+            check_executable_path,
             get_home_dir,
             open_path_in_explorer,
             terminal_create,
@@ -443,6 +467,9 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
             executable: find_first_existing(&[
                 "C:\\Program Files\\Git\\bin\\bash.exe",
                 "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+                "D:\\Git\\bin\\bash.exe",
+                "D:\\Program Files\\Git\\bin\\bash.exe",
+                "D:\\Program Files (x86)\\Git\\bin\\bash.exe",
             ])
             .unwrap_or_else(|| "C:\\Program Files\\Git\\bin\\bash.exe".to_string()),
             args: vec!["--login".to_string(), "-i".to_string()],
@@ -498,7 +525,7 @@ fn normalize_existing_dir(path: &str) -> AppResult<String> {
     if !canonical.is_dir() {
         return Err(format!("'{}' is not a directory", canonical.display()));
     }
-    Ok(path_to_string(canonical))
+    Ok(clean_windows_path(&path_to_string(canonical)))
 }
 
 fn shellexpand_home(path: &str) -> String {
@@ -514,6 +541,20 @@ fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().to_string()
 }
 
+fn clean_executable_path(path: &str) -> String {
+    clean_windows_path(path.trim().trim_matches('"'))
+}
+
+fn clean_windows_path(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{stripped}");
+    }
+    if let Some(stripped) = path.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    path.to_string()
+}
+
 fn find_first_existing(paths: &[&str]) -> Option<String> {
     paths
         .iter()
@@ -522,6 +563,7 @@ fn find_first_existing(paths: &[&str]) -> Option<String> {
 }
 
 fn executable_exists(executable: &str) -> bool {
+    let executable = clean_executable_path(executable);
     let executable = executable.trim();
     if executable.is_empty() {
         return false;
