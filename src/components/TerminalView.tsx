@@ -3,23 +3,23 @@ import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { resizeTerminal, writeTerminal } from "../services/tauriApi";
+import { writeTerminal } from "../services/tauriApi";
 import type { RuntimeTab } from "../types";
 
 type TerminalViewProps = {
   tab: RuntimeTab;
   active: boolean;
-  onImeAnchorReady?: (terminalId: string, refreshImeAnchor: () => void) => void;
   onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
   onDispose: (terminalId: string) => void;
+  onResize: (terminalId: string, cols: number, rows: number) => void;
 };
 
 export function TerminalView({
   tab,
   active,
-  onImeAnchorReady,
   onReady,
   onDispose,
+  onResize,
 }: TerminalViewProps) {
   const [composing, setComposing] = useState(false);
   const [compositionText, setCompositionText] = useState("");
@@ -30,8 +30,7 @@ export function TerminalView({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
   const composingRef = useRef(false);
-  const syncImeAnchorRef = useRef<() => void>(() => undefined);
-  const outputRefreshFrameRef = useRef<number | null>(null);
+  const imeAnchorFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     activeRef.current = active;
@@ -91,6 +90,7 @@ export function TerminalView({
     const syncImeAnchor = () => {
       const textarea = terminal.textarea;
       if (!textarea || !terminal.element) return;
+      if (!composingRef.current) return;
       const screen = terminal.element.querySelector(".xterm-screen");
       const compositionView = terminal.element.querySelector<HTMLElement>(
         ".composition-view",
@@ -102,9 +102,7 @@ export function TerminalView({
 
       const cellWidth = screenRect.width / Math.max(terminal.cols, 1);
       const cellHeight = screenRect.height / Math.max(terminal.rows, 1);
-      const dockAnchorRect = composingRef.current
-        ? imeDockAnchorRef.current?.getBoundingClientRect()
-        : undefined;
+      const dockAnchorRect = imeDockAnchorRef.current?.getBoundingClientRect();
       const cursorX = Math.min(
         terminal.buffer.active.cursorX,
         Math.max(terminal.cols - 1, 0),
@@ -113,27 +111,10 @@ export function TerminalView({
         terminal.buffer.active.cursorY,
         Math.max(terminal.rows - 1, 0),
       );
-      const bottomReserve = 112;
-      const viewportHeight =
-        window.visualViewport?.height ?? document.documentElement.clientHeight;
       const cursorTop = cursorY * cellHeight;
-      const cursorBottom = screenRect.top + cursorTop + cellHeight;
-      const viewportOverflow = Math.max(
-        0,
-        cursorBottom + bottomReserve - viewportHeight,
-      );
-      const screenOverflow = Math.max(
-        0,
-        cursorTop + cellHeight + bottomReserve - screenRect.height,
-      );
       const top = Math.max(
         0,
-        dockAnchorRect
-          ? dockAnchorRect.top - screenRect.top
-          : cursorTop -
-              (composingRef.current
-                ? Math.max(viewportOverflow, screenOverflow)
-                : 0),
+        dockAnchorRect ? dockAnchorRect.top - screenRect.top : cursorTop,
       );
       const left = dockAnchorRect
         ? dockAnchorRect.left - screenRect.left
@@ -154,7 +135,7 @@ export function TerminalView({
       );
       textarea.style.left = `${left}px`;
       textarea.style.top = `${top}px`;
-      if (composingRef.current && dockAnchorRect) {
+      if (dockAnchorRect) {
         textarea.style.position = "fixed";
         textarea.style.left = `${fixedLeft}px`;
         textarea.style.top = `${fixedTop}px`;
@@ -173,60 +154,52 @@ export function TerminalView({
         compositionView.style.lineHeight = `${cellHeight}px`;
       }
     };
-    syncImeAnchorRef.current = syncImeAnchor;
-    const scheduleImeAnchorSync = () => {
-      if (outputRefreshFrameRef.current !== null) return;
-      outputRefreshFrameRef.current = window.requestAnimationFrame(() => {
-        outputRefreshFrameRef.current = null;
-        syncImeAnchor();
-      });
-    };
     const fit = () => {
       try {
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
         fitAddon.fit();
         syncImeAnchor();
-        void resizeTerminal(tab.id, terminal.cols, terminal.rows);
+        onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // xterm can throw if the element is detached during fast tab switching.
       }
     };
-    const scheduleFit = () => {
-      window.requestAnimationFrame(() => {
-        syncImeAnchor();
-        window.requestAnimationFrame(syncImeAnchor);
+    let fitFrame: number | null = null;
+    const queueFit = () => {
+      if (fitFrame !== null) return;
+      fitFrame = window.requestAnimationFrame(() => {
+        fitFrame = null;
+        fit();
       });
-      window.setTimeout(syncImeAnchor, 40);
     };
-    const cursorDisposable = terminal.onCursorMove(syncImeAnchor);
-    const renderDisposable = terminal.onRender(scheduleImeAnchorSync);
-    terminal.textarea?.addEventListener("focus", syncImeAnchor);
-    onImeAnchorReady?.(tab.id, scheduleImeAnchorSync);
+    const queueImeAnchorSync = () => {
+      if (!composingRef.current || imeAnchorFrameRef.current !== null) return;
+      imeAnchorFrameRef.current = window.requestAnimationFrame(() => {
+        imeAnchorFrameRef.current = null;
+        syncImeAnchor();
+      });
+    };
     const handleCompositionStart = () => {
       composingRef.current = true;
       setComposing(true);
       setCompositionText("");
-      scheduleFit();
+      queueImeAnchorSync();
     };
     const handleCompositionUpdate = (event: CompositionEvent) => {
       setCompositionText(event.data);
-      syncImeAnchor();
-      window.requestAnimationFrame(syncImeAnchor);
+      queueImeAnchorSync();
     };
     const handleCompositionEnd = () => {
       composingRef.current = false;
       if (terminal.textarea) {
         terminal.textarea.style.position = "absolute";
+        terminal.textarea.style.zIndex = "";
       }
       setComposing(false);
       setCompositionText("");
-      scheduleFit();
     };
     const keepDockImeAnchor = () => {
-      if (!composingRef.current) return;
-      syncImeAnchor();
-      window.queueMicrotask(syncImeAnchor);
-      window.requestAnimationFrame(syncImeAnchor);
+      queueImeAnchorSync();
     };
     terminal.textarea?.addEventListener("compositionstart", handleCompositionStart);
     terminal.textarea?.addEventListener("compositionupdate", handleCompositionUpdate);
@@ -234,22 +207,21 @@ export function TerminalView({
     terminal.textarea?.addEventListener("beforeinput", keepDockImeAnchor, true);
     terminal.textarea?.addEventListener("input", keepDockImeAnchor, true);
 
-    const resizeObserver = new ResizeObserver(() => {
-      window.requestAnimationFrame(fit);
-    });
+    const resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(container);
-    window.requestAnimationFrame(fit);
+    queueFit();
     onReady(tab.id, terminal, fitAddon);
 
     return () => {
       inputDisposable.dispose();
-      cursorDisposable.dispose();
-      renderDisposable.dispose();
-      if (outputRefreshFrameRef.current !== null) {
-        window.cancelAnimationFrame(outputRefreshFrameRef.current);
-        outputRefreshFrameRef.current = null;
+      if (fitFrame !== null) {
+        window.cancelAnimationFrame(fitFrame);
+        fitFrame = null;
       }
-      terminal.textarea?.removeEventListener("focus", syncImeAnchor);
+      if (imeAnchorFrameRef.current !== null) {
+        window.cancelAnimationFrame(imeAnchorFrameRef.current);
+        imeAnchorFrameRef.current = null;
+      }
       terminal.textarea?.removeEventListener(
         "compositionstart",
         handleCompositionStart,
@@ -269,25 +241,8 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
-      syncImeAnchorRef.current = () => undefined;
     };
-  }, [onDispose, onImeAnchorReady, onReady, tab.id]);
-
-  useEffect(() => {
-    if (!composing) return;
-
-    const sync = () => syncImeAnchorRef.current();
-    sync();
-    const frameId = window.requestAnimationFrame(() => {
-      sync();
-      window.requestAnimationFrame(sync);
-    });
-    const timeoutId = window.setTimeout(sync, 40);
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      window.clearTimeout(timeoutId);
-    };
-  }, [composing, compositionText]);
+  }, [onDispose, onReady, onResize, tab.id]);
 
   useEffect(() => {
     if (!active || !fitAddonRef.current || !terminalRef.current) {
@@ -311,7 +266,7 @@ export function TerminalView({
         }
         fitAddon.fit();
         terminal.focus();
-        void resizeTerminal(tab.id, terminal.cols, terminal.rows);
+        onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // Ignore transient layout reads while React is switching views.
       }
@@ -323,7 +278,7 @@ export function TerminalView({
       window.cancelAnimationFrame(frameId);
       timeoutIds.forEach((id) => window.clearTimeout(id));
     };
-  }, [active, tab.id]);
+  }, [active, onResize, tab.id]);
 
   return (
     <div

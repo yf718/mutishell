@@ -122,9 +122,12 @@ export default function App() {
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
-  const imeAnchorRefreshRefs = useRef(new Map<string, () => void>());
+  const terminalOutputQueues = useRef(new Map<string, string[]>());
+  const terminalOutputFrame = useRef<number | null>(null);
+  const terminalSizeRefs = useRef(new Map<string, string>());
   const startedTerminals = useRef(new Set<string>());
   const saveTimer = useRef<number | null>(null);
+  const lastSavedSnapshot = useRef<string | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
   const draggedProjectId = useRef<string | null>(null);
@@ -141,6 +144,18 @@ export default function App() {
     () => tabs.filter((tab) => tab.projectId === activeProjectId),
     [activeProjectId, tabs],
   );
+
+  const tabCountByProject = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const tab of tabs) {
+      counts.set(tab.projectId, (counts.get(tab.projectId) ?? 0) + 1);
+    }
+    return counts;
+  }, [tabs]);
+
+  const shellProfileById = useMemo(() => {
+    return new Map(shellProfiles.map((profile) => [profile.id, profile]));
+  }, [shellProfiles]);
 
   const activeTabId = activeProjectId
     ? activeTabByProject[activeProjectId] ?? tabsForProject[0]?.id
@@ -192,9 +207,17 @@ export default function App() {
       window.clearTimeout(saveTimer.current);
     }
     saveTimer.current = window.setTimeout(() => {
-      void saveAppState(stateSnapshot()).catch((saveError) => {
-        setError(`保存会话失败: ${String(saveError)}`);
-      });
+      saveTimer.current = null;
+      const snapshot = stateSnapshot();
+      const serialized = JSON.stringify(snapshot);
+      if (serialized === lastSavedSnapshot.current) return;
+      void saveAppState(snapshot)
+        .then(() => {
+          lastSavedSnapshot.current = serialized;
+        })
+        .catch((saveError) => {
+          setError(`保存会话失败: ${String(saveError)}`);
+        });
     }, 350);
   }, [hydrated, stateSnapshot]);
 
@@ -479,27 +502,57 @@ export default function App() {
   const unregisterTerminal = useCallback((terminalId: string) => {
     terminalRefs.current.delete(terminalId);
     fitAddonRefs.current.delete(terminalId);
-    imeAnchorRefreshRefs.current.delete(terminalId);
+    terminalOutputQueues.current.delete(terminalId);
+    terminalSizeRefs.current.delete(terminalId);
   }, []);
 
-  const registerImeAnchorRefresh = useCallback(
-    (terminalId: string, refreshImeAnchor: () => void) => {
-      imeAnchorRefreshRefs.current.set(terminalId, refreshImeAnchor);
+  const resizeTerminalIfChanged = useCallback(
+    (terminalId: string, cols: number, rows: number) => {
+      const sizeKey = `${cols}x${rows}`;
+      if (terminalSizeRefs.current.get(terminalId) === sizeKey) return;
+      terminalSizeRefs.current.set(terminalId, sizeKey);
+      void resizeTerminal(terminalId, cols, rows);
     },
     [],
   );
 
+  const flushTerminalOutput = useCallback(() => {
+    terminalOutputFrame.current = null;
+    for (const [terminalId, chunks] of terminalOutputQueues.current) {
+      terminalOutputQueues.current.delete(terminalId);
+      if (chunks.length === 0) continue;
+      terminalRefs.current.get(terminalId)?.write(chunks.join(""));
+    }
+  }, []);
+
+  const enqueueTerminalOutput = useCallback(
+    (terminalId: string, data: string) => {
+      const queue = terminalOutputQueues.current.get(terminalId);
+      if (queue) {
+        queue.push(data);
+      } else {
+        terminalOutputQueues.current.set(terminalId, [data]);
+      }
+
+      if (terminalOutputFrame.current === null) {
+        terminalOutputFrame.current =
+          window.requestAnimationFrame(flushTerminalOutput);
+      }
+    },
+    [flushTerminalOutput],
+  );
+
   const fitActiveTerminal = useCallback(() => {
-    if (!activeTab) return;
-    const terminal = terminalRefs.current.get(activeTab.id);
-    const fitAddon = fitAddonRefs.current.get(activeTab.id);
+    if (!activeTabId) return;
+    const terminal = terminalRefs.current.get(activeTabId);
+    const fitAddon = fitAddonRefs.current.get(activeTabId);
     if (!terminal || !fitAddon) return;
 
     const fit = () => {
       try {
         fitAddon.fit();
         terminal.focus();
-        void resizeTerminal(activeTab.id, terminal.cols, terminal.rows);
+        resizeTerminalIfChanged(activeTabId, terminal.cols, terminal.rows);
       } catch {
         // The terminal may not be visible yet.
       }
@@ -508,7 +561,7 @@ export default function App() {
     window.requestAnimationFrame(fit);
     window.setTimeout(fit, 60);
     window.setTimeout(fit, 180);
-  }, [activeTab]);
+  }, [activeTabId, resizeTerminalIfChanged]);
 
   useEffect(() => {
     let cancelled = false;
@@ -636,8 +689,7 @@ export default function App() {
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     void onTerminalData(({ terminalId, data }) => {
-      terminalRefs.current.get(terminalId)?.write(data);
-      imeAnchorRefreshRefs.current.get(terminalId)?.();
+      enqueueTerminalOutput(terminalId, data);
     }).then((unlisten) => unlisteners.push(unlisten));
 
     void onTerminalExit(({ terminalId }) => {
@@ -653,8 +705,12 @@ export default function App() {
 
     return () => {
       for (const unlisten of unlisteners) unlisten();
+      if (terminalOutputFrame.current !== null) {
+        window.cancelAnimationFrame(terminalOutputFrame.current);
+        flushTerminalOutput();
+      }
     };
-  }, []);
+  }, [enqueueTerminalOutput, flushTerminalOutput]);
 
   useEffect(() => {
     const onBeforeUnload = () => {
@@ -737,9 +793,7 @@ export default function App() {
           ) : (
             filteredProjects.map((project) => {
               const active = project.id === activeProjectId;
-              const count = tabs.filter(
-                (tab) => tab.projectId === project.id,
-              ).length;
+              const count = tabCountByProject.get(project.id) ?? 0;
               return (
                 <div
                   className={[
@@ -877,9 +931,7 @@ export default function App() {
               </div>
               <div className="tabs">
                 {tabsForProject.map((tab) => {
-                  const profile = shellProfiles.find(
-                    (item) => item.id === tab.shellProfileId,
-                  );
+                  const profile = shellProfileById.get(tab.shellProfileId);
                   return (
                     <div
                       className={tab.id === activeTabId ? "tab active" : "tab"}
@@ -962,8 +1014,8 @@ export default function App() {
                   active={tab.id === activeTabId && tab.projectId === activeProjectId}
                   key={tab.id}
                   onDispose={unregisterTerminal}
-                  onImeAnchorReady={registerImeAnchorRefresh}
                   onReady={registerTerminal}
+                  onResize={resizeTerminalIfChanged}
                   tab={tab}
                 />
               ))}
