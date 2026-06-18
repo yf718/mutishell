@@ -122,6 +122,7 @@ export default function App() {
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
+  const imeAnchorRefreshRefs = useRef(new Map<string, () => void>());
   const startedTerminals = useRef(new Set<string>());
   const saveTimer = useRef<number | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
@@ -478,7 +479,15 @@ export default function App() {
   const unregisterTerminal = useCallback((terminalId: string) => {
     terminalRefs.current.delete(terminalId);
     fitAddonRefs.current.delete(terminalId);
+    imeAnchorRefreshRefs.current.delete(terminalId);
   }, []);
+
+  const registerImeAnchorRefresh = useCallback(
+    (terminalId: string, refreshImeAnchor: () => void) => {
+      imeAnchorRefreshRefs.current.set(terminalId, refreshImeAnchor);
+    },
+    [],
+  );
 
   const fitActiveTerminal = useCallback(() => {
     if (!activeTab) return;
@@ -628,6 +637,7 @@ export default function App() {
     const unlisteners: Array<() => void> = [];
     void onTerminalData(({ terminalId, data }) => {
       terminalRefs.current.get(terminalId)?.write(data);
+      imeAnchorRefreshRefs.current.get(terminalId)?.();
     }).then((unlisten) => unlisteners.push(unlisten));
 
     void onTerminalExit(({ terminalId }) => {
@@ -952,6 +962,7 @@ export default function App() {
                   active={tab.id === activeTabId && tab.projectId === activeProjectId}
                   key={tab.id}
                   onDispose={unregisterTerminal}
+                  onImeAnchorReady={registerImeAnchorRefresh}
                   onReady={registerTerminal}
                   tab={tab}
                 />

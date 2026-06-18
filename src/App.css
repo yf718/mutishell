@@ -636,10 +636,6 @@ button {
   overflow: hidden;
 }
 
-.terminal-view.is-composing .terminal-mount {
-  padding-bottom: 58px;
-}
-
 .terminal-mount .xterm {
   height: 100%;
 }
@@ -652,12 +648,89 @@ button {
   z-index: 20;
 }
 
+.terminal-view.is-composing .xterm .xterm-helper-textarea {
+  position: fixed !important;
+  left: var(--ime-anchor-fixed-left, 220px) !important;
+  top: var(--ime-anchor-fixed-top, calc(100vh - 76px)) !important;
+  width: var(--ime-anchor-width, 120px) !important;
+  height: var(--ime-anchor-height, 18px) !important;
+  line-height: var(--ime-anchor-height, 18px) !important;
+  z-index: 30 !important;
+}
+
 .terminal-view:not(.is-active) .xterm .xterm-helper-textarea {
   pointer-events: none;
 }
 
 .terminal-view.is-active .xterm .composition-view {
+  max-width: min(420px, 70vw);
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(17, 19, 24, 0.92);
   z-index: 21;
+}
+
+.terminal-view.is-composing .xterm .composition-view {
+  opacity: 0;
+}
+
+.terminal-ime-dock {
+  position: absolute;
+  z-index: 30;
+  right: 16px;
+  bottom: 14px;
+  left: 16px;
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(31, 31, 31, 0.96);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+  color: #e8edf3;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.terminal-view.is-composing .terminal-ime-dock {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.terminal-ime-prompt {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #9fb0bd;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.terminal-ime-text {
+  display: inline-flex;
+  min-width: 120px;
+  max-width: calc(100% - 62px);
+  height: 28px;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 2px solid #a6e3a1;
+  color: #f4f7fb;
+  font-family:
+    Cascadia Mono, CaskaydiaCove Nerd Font, Consolas, "Courier New", monospace;
+  font-size: 15px;
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-overlay {
