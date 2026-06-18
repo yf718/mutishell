@@ -64,7 +64,7 @@ pub struct AppStateFile {
     pub shell_profiles: Vec<ShellProfile>,
     pub default_shell_profile_id: String,
     #[serde(default = "default_sidebar_width")]
-    pub sidebar_width: u16,
+    pub sidebar_width: f64,
     #[serde(default = "default_theme")]
     pub theme: String,
 }
@@ -437,8 +437,8 @@ fn default_app_state() -> AppStateFile {
     }
 }
 
-fn default_sidebar_width() -> u16 {
-    260
+fn default_sidebar_width() -> f64 {
+    260.0
 }
 
 fn default_theme() -> String {

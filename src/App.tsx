@@ -77,7 +77,9 @@ function defaultState(shellProfiles: ShellProfile[] = []): AppStateFile {
 }
 
 function clampSidebarWidth(width: number) {
-  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+  return Math.round(
+    Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)),
+  );
 }
 
 function tabToSaved(tab: RuntimeTab): SavedTab {
@@ -164,7 +166,7 @@ export default function App() {
       activeTabByProject,
       shellProfiles,
       defaultShellProfileId,
-      sidebarWidth,
+      sidebarWidth: Math.round(sidebarWidth),
       theme,
     };
   }, [
@@ -291,7 +293,7 @@ export default function App() {
       createdAt,
       lastOpenedAt: createdAt,
     };
-    setProjects((current) => [project, ...current]);
+    setProjects((current) => [...current, project]);
     setActiveProjectId(project.id);
 
     const profile =
@@ -345,6 +347,32 @@ export default function App() {
       return next;
     });
   }, []);
+
+  const startProjectDrag = useCallback(
+    (
+      event: React.DragEvent<HTMLDivElement>,
+      projectId: string,
+    ) => {
+      if (!projectSortingEnabled) {
+        event.preventDefault();
+        return;
+      }
+      draggedProjectId.current = projectId;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", projectId);
+    },
+    [projectSortingEnabled],
+  );
+
+  const reorderProjectOnEnter = useCallback(
+    (targetId: string) => {
+      if (!projectSortingEnabled) return;
+      const sourceId = draggedProjectId.current;
+      if (!sourceId || sourceId === targetId) return;
+      moveProject(sourceId, targetId);
+    },
+    [moveProject, projectSortingEnabled],
+  );
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -618,43 +646,41 @@ export default function App() {
                 (tab) => tab.projectId === project.id,
               ).length;
               return (
-                <button
+                <div
                   className={active ? "project-item active" : "project-item"}
                   draggable={projectSortingEnabled}
                   onDragEnd={() => {
                     draggedProjectId.current = null;
                   }}
+                  onDragEnter={() => reorderProjectOnEnter(project.id)}
                   onDragOver={(event) => {
                     if (!projectSortingEnabled) return;
                     event.preventDefault();
                   }}
-                  onDragStart={(event) => {
-                    if (!projectSortingEnabled) {
-                      event.preventDefault();
-                      return;
-                    }
-                    draggedProjectId.current = project.id;
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("text/plain", project.id);
-                  }}
+                  onDragStart={(event) => startProjectDrag(event, project.id)}
                   onDrop={(event) => {
                     if (!projectSortingEnabled) return;
                     event.preventDefault();
-                    const sourceId =
-                      draggedProjectId.current ||
-                      event.dataTransfer.getData("text/plain");
+                    const sourceId = event.dataTransfer.getData("text/plain");
                     draggedProjectId.current = null;
                     if (sourceId) moveProject(sourceId, project.id);
                   }}
                   key={project.id}
                   onClick={() => setActiveProjectId(project.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setActiveProjectId(project.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                   title={project.path}
-                  type="button"
                 >
                   {active ? <FolderOpen size={17} /> : <Folder size={17} />}
                   <span>{project.name}</span>
                   {count > 0 && <em>{count}</em>}
-                </button>
+                </div>
               );
             })
           )}
