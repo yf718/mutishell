@@ -1,6 +1,4 @@
 :root {
-  color: #1f2933;
-  background: #eef5f7;
   font-family:
     Inter, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial,
     sans-serif;
@@ -23,6 +21,7 @@ body {
   min-width: 960px;
   min-height: 640px;
   overflow: hidden;
+  background: #111318;
 }
 
 button,
@@ -51,18 +50,67 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
-  background: #f7fbfc;
+  grid-template-columns: var(--sidebar-width, 260px) 5px minmax(0, 1fr);
+  --accent: #1d6f87;
+  --app-bg: #f7fbfc;
+  --sidebar-bg: #eaf6f8;
+  --panel-bg: #ffffff;
+  --panel-soft: #f4f8fa;
+  --input-bg: #f9fdfe;
+  --item-hover: #e7f1f3;
+  --item-active: #dbeef2;
+  --border: #d8e4e8;
+  --border-soft: #e2e9ec;
+  --text: #1f2933;
+  --text-strong: #16242d;
+  --muted: #71808b;
+  --muted-strong: #596976;
+  --terminal-bg: #111318;
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+.app-shell[data-theme="dark"] {
+  --accent: #4fa3b8;
+  --app-bg: #12161d;
+  --sidebar-bg: #182129;
+  --panel-bg: #151b23;
+  --panel-soft: #101720;
+  --input-bg: #111922;
+  --item-hover: #202c36;
+  --item-active: #263844;
+  --border: #2b3843;
+  --border-soft: #24313b;
+  --text: #dbe5ec;
+  --text-strong: #f4f7f9;
+  --muted: #93a3ad;
+  --muted-strong: #b1c0c9;
+  --terminal-bg: #0f1218;
 }
 
 .sidebar {
   display: flex;
+  height: 100vh;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
   padding: 18px 14px 16px;
-  border-right: 1px solid #d8e4e8;
-  background: #eaf6f8;
+  background: var(--sidebar-bg);
+}
+
+.sidebar-resizer {
+  width: 5px;
+  border-right: 1px solid var(--border);
+  border-left: 1px solid transparent;
+  background: var(--sidebar-bg);
+  cursor: col-resize;
+}
+
+.sidebar-resizer:hover {
+  border-left-color: var(--accent);
+  background: var(--item-hover);
 }
 
 .sidebar-top,
@@ -87,7 +135,7 @@ button {
   min-width: 0;
   align-items: center;
   gap: 10px;
-  color: #19242d;
+  color: var(--text-strong);
 }
 
 .brand div,
@@ -119,7 +167,7 @@ button {
 .muted {
   display: block;
   overflow: hidden;
-  color: #71808b;
+  color: var(--muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -131,10 +179,10 @@ button {
   align-items: center;
   gap: 8px;
   padding: 0 11px;
-  border: 1px solid #d6e2e6;
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #f9fdfe;
-  color: #70808a;
+  background: var(--input-bg);
+  color: var(--muted);
 }
 
 .search-box input {
@@ -143,7 +191,7 @@ button {
   border: 0;
   outline: 0;
   background: transparent;
-  color: #1e2a33;
+  color: var(--text);
 }
 
 .add-project,
@@ -163,14 +211,14 @@ button {
 
 .add-project {
   width: 100%;
-  border: 1px solid #bdd5db;
-  background: #f7fcfd;
-  color: #1f4f5f;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text-strong);
 }
 
 .primary-button {
   padding: 0 13px;
-  background: #1d6f87;
+  background: var(--accent);
   color: #ffffff;
 }
 
@@ -183,9 +231,9 @@ button {
 
 .ghost-button {
   padding: 0 12px;
-  border: 1px solid #d8e1e5;
-  background: #ffffff;
-  color: #42505a;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
 }
 
 .icon-button {
@@ -196,7 +244,7 @@ button {
   justify-content: center;
   border-radius: 7px;
   background: transparent;
-  color: #596976;
+  color: var(--muted-strong);
   cursor: pointer;
 }
 
@@ -204,7 +252,7 @@ button {
 .ghost-button:hover,
 .add-project:hover,
 .quick-profiles button:hover {
-  background: #e7f1f3;
+  background: var(--item-hover);
 }
 
 .icon-button.danger:hover {
@@ -216,12 +264,36 @@ button {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.project-list::-webkit-scrollbar,
+.tabs::-webkit-scrollbar,
+.settings-grid::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.project-list::-webkit-scrollbar-thumb,
+.tabs::-webkit-scrollbar-thumb,
+.settings-grid::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--border);
+  background-clip: content-box;
+}
+
+.project-list::-webkit-scrollbar-track,
+.tabs::-webkit-scrollbar-track,
+.settings-grid::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .section-label {
   margin: 8px 0 8px;
-  color: #94a2aa;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -236,9 +308,17 @@ button {
   padding: 0 9px;
   border-radius: 7px;
   background: transparent;
-  color: #576872;
+  color: var(--muted-strong);
   cursor: pointer;
   text-align: left;
+}
+
+.project-item[draggable="true"] {
+  cursor: grab;
+}
+
+.project-item[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .project-item span {
@@ -251,8 +331,8 @@ button {
   min-width: 20px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: #d8e7eb;
-  color: #4e626d;
+  background: var(--item-active);
+  color: var(--muted-strong);
   font-size: 11px;
   font-style: normal;
   text-align: center;
@@ -260,8 +340,8 @@ button {
 
 .project-item:hover,
 .project-item.active {
-  background: #dbeef2;
-  color: #17313c;
+  background: var(--item-active);
+  color: var(--text-strong);
 }
 
 .empty-side {
@@ -269,14 +349,14 @@ button {
   align-items: center;
   gap: 8px;
   padding: 14px 9px;
-  color: #8a989f;
+  color: var(--muted);
 }
 
 .workspace {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  background: #fbfdfe;
+  background: var(--app-bg);
 }
 
 .topbar {
@@ -285,8 +365,8 @@ button {
   flex: none;
   gap: 18px;
   padding: 0 18px;
-  border-bottom: 1px solid #e2e9ec;
-  background: #ffffff;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel-bg);
 }
 
 .project-title {
@@ -294,7 +374,7 @@ button {
 }
 
 .project-title strong {
-  color: #16242d;
+  color: var(--text-strong);
   font-size: 16px;
 }
 
@@ -312,9 +392,9 @@ button {
   right: 0;
   width: 230px;
   padding: 6px;
-  border: 1px solid #dce5e8;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
   box-shadow: 0 18px 40px rgba(17, 24, 39, 0.14);
 }
 
@@ -328,13 +408,13 @@ button {
   padding: 0 9px;
   border-radius: 6px;
   background: transparent;
-  color: #2c3842;
+  color: var(--text);
   cursor: pointer;
   text-align: left;
 }
 
 .terminal-menu button:hover {
-  background: #eef6f8;
+  background: var(--item-hover);
 }
 
 .terminal-menu span {
@@ -379,9 +459,22 @@ button {
 .tab-strip {
   height: 42px;
   flex: none;
-  gap: 10px;
-  border-bottom: 1px solid #dce4e8;
-  background: #f4f8fa;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel-soft);
+}
+
+.terminal-count {
+  display: inline-flex;
+  height: 24px;
+  min-width: 38px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .tabs {
@@ -396,22 +489,22 @@ button {
 .tab {
   position: relative;
   display: grid;
-  min-width: 150px;
-  max-width: 240px;
+  min-width: 132px;
+  max-width: 220px;
   height: 42px;
   grid-template-columns: 18px minmax(0, 1fr) 9px 22px;
   align-items: center;
   gap: 7px;
   padding: 0 6px 0 12px;
-  border-right: 1px solid #dde7eb;
+  border-right: 1px solid var(--border-soft);
   background: transparent;
-  color: #596771;
+  color: var(--muted-strong);
   cursor: pointer;
 }
 
 .tab.active {
-  background: #ffffff;
-  color: #18262f;
+  background: var(--panel-bg);
+  color: var(--text-strong);
 }
 
 .tab span {
@@ -451,13 +544,13 @@ button {
   justify-content: center;
   border-radius: 5px;
   background: transparent;
-  color: #778690;
+  color: var(--muted);
   cursor: pointer;
 }
 
 .tab-close:hover {
-  background: #edf2f4;
-  color: #26333c;
+  background: var(--item-hover);
+  color: var(--text-strong);
 }
 
 .tab-actions {
@@ -472,7 +565,7 @@ button {
   position: relative;
   min-height: 0;
   flex: 1;
-  background: #111318;
+  background: var(--terminal-bg);
 }
 
 .terminal-view {
@@ -540,12 +633,12 @@ button {
 }
 
 .welcome {
-  color: #596a75;
+  color: var(--muted-strong);
 }
 
 .welcome h1 {
   margin: 16px 0 8px;
-  color: #16242d;
+  color: var(--text-strong);
   font-size: 24px;
   font-weight: 650;
 }
@@ -557,11 +650,11 @@ button {
 
 .empty-workspace {
   gap: 10px;
-  color: #6d7c86;
+  color: var(--muted);
 }
 
 .empty-workspace strong {
-  color: #22313b;
+  color: var(--text-strong);
   font-size: 18px;
 }
 
@@ -576,9 +669,9 @@ button {
 
 .quick-profiles button {
   padding: 0 12px;
-  border: 1px solid #d4e0e4;
-  background: #ffffff;
-  color: #283842;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
 }
 
 .modal-backdrop {
@@ -598,20 +691,20 @@ button {
   max-height: min(720px, 90vh);
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #d9e2e6;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
 }
 
 .settings-dialog header {
   flex: none;
   padding: 16px 18px;
-  border-bottom: 1px solid #e4ebee;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .settings-dialog header strong {
-  color: #18262f;
+  color: var(--text-strong);
   font-size: 16px;
 }
 
@@ -626,7 +719,7 @@ button {
 
 .settings-grid h2 {
   margin: 0 0 10px;
-  color: #23323c;
+  color: var(--text-strong);
   font-size: 13px;
   font-weight: 650;
 }
@@ -645,9 +738,9 @@ button {
   align-items: center;
   gap: 10px;
   padding: 10px;
-  border: 1px solid #e1e8eb;
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fbfdfe;
+  background: var(--input-bg);
 }
 
 .profile-row {
@@ -664,11 +757,11 @@ button {
   height: 28px;
   margin-top: 3px;
   padding: 0 8px;
-  border: 1px solid #d8e2e6;
+  border: 1px solid var(--border);
   border-radius: 6px;
   outline: 0;
-  background: #ffffff;
-  color: #35444f;
+  background: var(--panel-bg);
+  color: var(--text);
   font-size: 12px;
 }
 
@@ -687,8 +780,8 @@ button {
   height: 24px;
   padding: 0 8px;
   border-radius: 5px;
-  background: #edf5f7;
-  color: #315262;
+  background: var(--item-hover);
+  color: var(--text);
   cursor: pointer;
   font-size: 12px;
 }
@@ -718,12 +811,12 @@ button {
 .settings-dialog footer {
   flex: none;
   padding: 14px 18px;
-  border-top: 1px solid #e4ebee;
+  border-top: 1px solid var(--border-soft);
 }
 
 @media (max-width: 980px) {
   .app-shell {
-    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-columns: var(--sidebar-width, 220px) 5px minmax(0, 1fr);
   }
 
   .ghost-button {

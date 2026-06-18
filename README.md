@@ -6,10 +6,11 @@ React, and xterm.js.
 The first MVP focuses on one workflow:
 
 1. Keep a left sidebar of project folders.
-2. Open multiple terminal tabs per project folder.
+2. Open up to 5 terminal tabs per project folder.
 3. Support PowerShell, PowerShell 7, CMD, Git Bash, and WSL profiles.
-4. Remember projects, tabs, active project, and active tab before closing.
+4. Remember projects, tabs, active project, active tab, sidebar width, and theme before closing.
 5. Restore the previous workspace on the next launch.
+6. Scroll and drag-sort the project list when many folders are configured.
 
 ## Tech Stack
 
@@ -128,7 +129,9 @@ The state file shape is:
   "activeProjectId": null,
   "activeTabByProject": {},
   "shellProfiles": [],
-  "defaultShellProfileId": "powershell"
+  "defaultShellProfileId": "powershell",
+  "sidebarWidth": 260,
+  "theme": "dark"
 }
 ```
 
@@ -192,7 +195,9 @@ This is important because users may install Git Bash outside
 - Keep Tauri command names centralized in `src/services/tauriApi.ts`.
 - Keep frontend data contracts in `src/types.ts`.
 - Avoid storing terminal process state in React. Rust owns live PTY processes.
-- React owns user workspace state: projects, tabs, active selections.
+- React owns user workspace state: projects, tabs, active selections, sidebar width, and theme.
+- Project order is the array order in `projects`; drag sorting mutates this
+  array and is disabled while filtering via search.
 - Add new Rust commands to `invoke_handler` and expose matching wrappers in
   `tauriApi.ts`.
 - If splitting `App.tsx`, move project/tab mutations into a small store first,
@@ -201,13 +206,16 @@ This is important because users may install Git Bash outside
   state files huge.
 - For performance, keep inactive xterm instances mounted but hidden. This keeps
   scrollback and terminal state alive while switching tabs.
+- Each project is intentionally limited to 5 terminal tabs in the MVP. Update
+  `MAX_TERMINALS_PER_PROJECT` in `src/App.tsx` if this changes.
 
 ## Known MVP Limits
 
 - No split panes yet.
+- Each project is capped at 5 terminal tabs.
 - Shell profile path editing exists, but adding/removing profiles is not exposed yet.
 - No terminal output persistence.
-- No drag reorder for project items or tabs.
+- No drag reorder for terminal tabs.
 - No SSH manager.
 - No command/task templates.
 

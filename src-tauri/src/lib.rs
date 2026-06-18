@@ -63,6 +63,10 @@ pub struct AppStateFile {
     pub active_tab_by_project: HashMap<String, String>,
     pub shell_profiles: Vec<ShellProfile>,
     pub default_shell_profile_id: String,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u16,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -428,7 +432,17 @@ fn default_app_state() -> AppStateFile {
         active_tab_by_project: HashMap::new(),
         default_shell_profile_id: default_shell_id(&shell_profiles),
         shell_profiles,
+        sidebar_width: default_sidebar_width(),
+        theme: default_theme(),
     }
+}
+
+fn default_sidebar_width() -> u16 {
+    260
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
 }
 
 fn default_shell_profiles() -> Vec<ShellProfile> {

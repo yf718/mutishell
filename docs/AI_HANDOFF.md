@@ -15,9 +15,12 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 
 - Add project folders from a native directory picker.
 - Switch projects from the sidebar.
-- Create terminal tabs with detected shell profiles.
+- Create up to 5 terminal tabs per project with detected shell profiles.
 - Restore saved projects and terminal tabs after app restart.
 - Restart or close terminal tabs.
+- Drag the sidebar divider to persist a custom sidebar width.
+- Scroll and drag-sort the project list. Sorting is disabled while search is active.
+- Toggle and persist light/dark UI theme.
 - Save state automatically with a short debounce.
 
 ## Important Files
@@ -52,7 +55,12 @@ React owns:
 - saved tab definitions
 - active project
 - active tab per project
+- sidebar width
+- theme
 - settings dialog state
+
+Project order is stored directly in the `projects` array. Do not add a second
+sort key unless the UI is changed to explain that sorting mode.
 
 Do not put process handles or terminal output history into persisted React state.
 
@@ -100,6 +108,8 @@ profile is saved in `state.json` and passed back to Rust in
 - Restart should remove the tab id from `startedTerminals`.
 - PTY output must be routed by `terminalId`; never broadcast output to all tabs.
 - Keep hidden terminal views mounted so scrollback survives tab switching.
+- Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
+  `src/App.tsx`.
 
 ## Safe Next Features
 
@@ -133,5 +143,9 @@ Before handing off changes:
 - Add a project folder
 - Open PowerShell
 - Type a command
+- Confirm the current project refuses the 6th terminal tab
+- Drag the sidebar narrower and restart to confirm the width restores
+- Drag-sort projects and restart to confirm the order restores
+- Toggle light/dark theme and restart to confirm the theme restores
 - Switch away and back
 - Close and restart the app to confirm saved tabs restore

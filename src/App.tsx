@@ -4,6 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 import {
   ChevronDown,
   Circle,
+  Moon,
   Folder,
   FolderOpen,
   Maximize2,
@@ -12,6 +13,7 @@ import {
   Search,
   Settings,
   SquareTerminal,
+  Sun,
   Trash2,
   X,
 } from "lucide-react";
@@ -32,11 +34,16 @@ import {
 } from "./services/tauriApi";
 import type {
   AppStateFile,
+  AppTheme,
   Project,
   RuntimeTab,
   SavedTab,
   ShellProfile,
 } from "./types";
+
+const MAX_TERMINALS_PER_PROJECT = 5;
+const MIN_SIDEBAR_WIDTH = 180;
+const MAX_SIDEBAR_WIDTH = 340;
 
 function nowIso() {
   return new Date().toISOString();
@@ -64,7 +71,13 @@ function defaultState(shellProfiles: ShellProfile[] = []): AppStateFile {
     shellProfiles,
     defaultShellProfileId:
       shellProfiles.find((item) => item.detected)?.id ?? "powershell",
+    sidebarWidth: 260,
+    theme: "dark",
   };
+}
+
+function clampSidebarWidth(width: number) {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 }
 
 function tabToSaved(tab: RuntimeTab): SavedTab {
@@ -100,6 +113,8 @@ export default function App() {
   const [newTerminalOpen, setNewTerminalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [theme, setTheme] = useState<AppTheme>("dark");
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
@@ -107,6 +122,7 @@ export default function App() {
   const saveTimer = useRef<number | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
+  const draggedProjectId = useRef<string | null>(null);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -137,6 +153,7 @@ export default function App() {
     () => shellProfiles.filter((profile) => profile.detected),
     [shellProfiles],
   );
+  const projectSortingEnabled = query.trim().length === 0;
 
   const stateSnapshot = useCallback((): AppStateFile => {
     return {
@@ -147,14 +164,18 @@ export default function App() {
       activeTabByProject,
       shellProfiles,
       defaultShellProfileId,
+      sidebarWidth,
+      theme,
     };
   }, [
     activeProjectId,
     activeTabByProject,
     defaultShellProfileId,
     projects,
+    sidebarWidth,
     shellProfiles,
     tabs,
+    theme,
   ]);
 
   const scheduleSave = useCallback(() => {
@@ -220,13 +241,17 @@ export default function App() {
 
   const createTab = useCallback(
     (project: Project, profile: ShellProfile) => {
+      const projectTabs = tabs.filter((tab) => tab.projectId === project.id);
+      if (projectTabs.length >= MAX_TERMINALS_PER_PROJECT) {
+        setError(`每个项目最多打开 ${MAX_TERMINALS_PER_PROJECT} 个终端`);
+        setNewTerminalOpen(false);
+        return;
+      }
+
       const createdAt = nowIso();
       const id = makeId("tab");
       const sameProfileCount =
-        tabs.filter(
-          (tab) =>
-            tab.projectId === project.id && tab.shellProfileId === profile.id,
-        ).length + 1;
+        projectTabs.filter((tab) => tab.shellProfileId === profile.id).length + 1;
       const title =
         sameProfileCount > 1 ? `${profile.name} ${sameProfileCount}` : profile.name;
 
@@ -307,6 +332,19 @@ export default function App() {
     },
     [activeProjectId, projects, tabs],
   );
+
+  const moveProject = useCallback((sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setProjects((current) => {
+      const sourceIndex = current.findIndex((project) => project.id === sourceId);
+      const targetIndex = current.findIndex((project) => project.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const next = [...current];
+      const [source] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, source);
+      return next;
+    });
+  }, []);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -400,6 +438,8 @@ export default function App() {
             null,
         );
         setActiveTabByProject(state.activeTabByProject ?? {});
+        setSidebarWidth(clampSidebarWidth(state.sidebarWidth ?? 260));
+        setTheme(state.theme ?? "dark");
         setHydrated(true);
       } catch (hydrateError) {
         const profiles = await getShellProfiles().catch(() => []);
@@ -436,9 +476,29 @@ export default function App() {
     hydrated,
     projects,
     scheduleSave,
+    sidebarWidth,
     shellProfiles,
     tabs,
+    theme,
   ]);
+
+  const beginSidebarResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = sidebarWidth;
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        setSidebarWidth(clampSidebarWidth(startWidth + moveEvent.clientX - startX));
+      };
+      const handlePointerUp = () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+      };
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+    },
+    [sidebarWidth],
+  );
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -506,7 +566,11 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      data-theme={theme}
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
+    >
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">
@@ -556,6 +620,32 @@ export default function App() {
               return (
                 <button
                   className={active ? "project-item active" : "project-item"}
+                  draggable={projectSortingEnabled}
+                  onDragEnd={() => {
+                    draggedProjectId.current = null;
+                  }}
+                  onDragOver={(event) => {
+                    if (!projectSortingEnabled) return;
+                    event.preventDefault();
+                  }}
+                  onDragStart={(event) => {
+                    if (!projectSortingEnabled) {
+                      event.preventDefault();
+                      return;
+                    }
+                    draggedProjectId.current = project.id;
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", project.id);
+                  }}
+                  onDrop={(event) => {
+                    if (!projectSortingEnabled) return;
+                    event.preventDefault();
+                    const sourceId =
+                      draggedProjectId.current ||
+                      event.dataTransfer.getData("text/plain");
+                    draggedProjectId.current = null;
+                    if (sourceId) moveProject(sourceId, project.id);
+                  }}
                   key={project.id}
                   onClick={() => setActiveProjectId(project.id)}
                   title={project.path}
@@ -570,6 +660,12 @@ export default function App() {
           )}
         </div>
       </aside>
+      <div
+        className="sidebar-resizer"
+        onPointerDown={beginSidebarResize}
+        role="separator"
+        title="拖动调整侧栏宽度"
+      />
 
       <section className="workspace">
         <header className="topbar">
@@ -578,6 +674,16 @@ export default function App() {
             <span>{activeProject?.path ?? "添加项目后即可在该目录打开终端"}</span>
           </div>
           <div className="topbar-actions">
+            <button
+              className="icon-button"
+              onClick={() =>
+                setTheme((current) => (current === "dark" ? "light" : "dark"))
+              }
+              title={theme === "dark" ? "切换浅色模式" : "切换深色模式"}
+              type="button"
+            >
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
             {activeProject && (
               <button
                 className="ghost-button"
@@ -590,9 +696,18 @@ export default function App() {
             )}
             <button
               className="primary-button"
-              disabled={!activeProject || shellProfiles.length === 0}
+              disabled={
+                !activeProject ||
+                shellProfiles.length === 0 ||
+                tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+              }
               onClick={() => setNewTerminalOpen((current) => !current)}
               type="button"
+              title={
+                tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                  ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
+                  : "新建终端"
+              }
             >
               <Plus size={16} />
               新建终端
@@ -602,7 +717,10 @@ export default function App() {
               <div className="terminal-menu">
                 {shellProfiles.map((profile) => (
                   <button
-                    disabled={!profile.detected}
+                    disabled={
+                      !profile.detected ||
+                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                    }
                     key={profile.id}
                     onClick={() => createTab(activeProject, profile)}
                     type="button"
@@ -629,6 +747,9 @@ export default function App() {
         {activeProject ? (
           <div className="terminal-area">
             <div className="tab-strip">
+              <div className="terminal-count">
+                {tabsForProject.length}/{MAX_TERMINALS_PER_PROJECT}
+              </div>
               <div className="tabs">
                 {tabsForProject.map((tab) => {
                   const profile = shellProfiles.find(
@@ -678,6 +799,19 @@ export default function App() {
               {activeTab && (
                 <div className="tab-actions">
                   <button
+                    className="icon-button compact-add"
+                    disabled={tabsForProject.length >= MAX_TERMINALS_PER_PROJECT}
+                    onClick={() => setNewTerminalOpen((current) => !current)}
+                    title={
+                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                        ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
+                        : "新增终端"
+                    }
+                    type="button"
+                  >
+                    <Plus size={15} />
+                  </button>
+                  <button
                     className="icon-button"
                     onClick={() => void restartTab(activeTab)}
                     title="重启当前终端"
@@ -716,7 +850,10 @@ export default function App() {
                     {(detectedProfiles.length ? detectedProfiles : shellProfiles).map(
                       (profile) => (
                         <button
-                          disabled={!profile.detected}
+                          disabled={
+                            !profile.detected ||
+                            tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                          }
                           key={profile.id}
                           onClick={() => createTab(activeProject, profile)}
                           type="button"

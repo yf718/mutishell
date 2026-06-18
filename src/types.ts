@@ -7,6 +7,8 @@ export type ShellProfile = {
   detected: boolean;
 };
 
+export type AppTheme = "light" | "dark";
+
 export type Project = {
   id: string;
   name: string;
@@ -32,6 +34,8 @@ export type AppStateFile = {
   activeTabByProject: Record<string, string>;
   shellProfiles: ShellProfile[];
   defaultShellProfileId: string;
+  sidebarWidth?: number;
+  theme?: AppTheme;
 };
 
 export type TerminalCreateRequest = {
