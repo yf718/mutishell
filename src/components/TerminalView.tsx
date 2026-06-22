@@ -31,6 +31,8 @@ function TerminalViewComponent({
   const activeRef = useRef(active);
   const composingRef = useRef(false);
   const imeAnchorFrameRef = useRef<number | null>(null);
+  const refreshFrameRef = useRef<number | null>(null);
+  const refreshTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     activeRef.current = active;
@@ -87,22 +89,45 @@ function TerminalViewComponent({
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    const clearQueuedRefresh = () => {
+      if (refreshFrameRef.current !== null) {
+        window.cancelAnimationFrame(refreshFrameRef.current);
+        refreshFrameRef.current = null;
+      }
+      if (refreshTimeoutRef.current !== null) {
+        window.clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
+    };
+    const refreshVisibleRows = (clearTexture = false) => {
+      if (!activeRef.current) return;
+      if (clearTexture) {
+        terminal.clearTextureAtlas();
+      }
+      terminal.refresh(0, terminal.rows - 1);
+    };
+    const queueRefresh = (clearTexture = false) => {
+      if (refreshFrameRef.current !== null) return;
+      refreshFrameRef.current = window.requestAnimationFrame(() => {
+        refreshFrameRef.current = null;
+        refreshVisibleRows(clearTexture);
+
+        if (refreshTimeoutRef.current !== null) {
+          window.clearTimeout(refreshTimeoutRef.current);
+        }
+        refreshTimeoutRef.current = window.setTimeout(() => {
+          refreshTimeoutRef.current = null;
+          refreshVisibleRows(clearTexture);
+        }, 80);
+      });
+    };
     const inputDisposable = terminal.onData((data) => {
       void writeTerminal(tab.id, data).catch((error) => {
         terminal.writeln(`\r\n[mutishell] 写入终端失败: ${String(error)}`);
       });
     });
-    let refreshFrame: number | null = null;
-    const queueScrollRefresh = () => {
-      if (refreshFrame !== null) return;
-      refreshFrame = window.requestAnimationFrame(() => {
-        refreshFrame = null;
-        if (!activeRef.current) return;
-        terminal.refresh(0, terminal.rows - 1);
-      });
-    };
     const handleWheel = () => {
-      queueScrollRefresh();
+      queueRefresh();
     };
     container.addEventListener("wheel", handleWheel, { passive: true });
     const syncImeAnchor = () => {
@@ -177,6 +202,7 @@ function TerminalViewComponent({
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
         fitAddon.fit();
         syncImeAnchor();
+        queueRefresh(true);
         onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // xterm can throw if the element is detached during fast tab switching.
@@ -233,10 +259,7 @@ function TerminalViewComponent({
     return () => {
       inputDisposable.dispose();
       container.removeEventListener("wheel", handleWheel);
-      if (refreshFrame !== null) {
-        window.cancelAnimationFrame(refreshFrame);
-        refreshFrame = null;
-      }
+      clearQueuedRefresh();
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
         fitFrame = null;
