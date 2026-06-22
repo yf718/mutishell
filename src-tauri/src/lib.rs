@@ -12,14 +12,55 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use uuid::Uuid;
 
 const APP_DIR_NAME: &str = "mutishell";
 const STATE_FILE_NAME: &str = "state.json";
+const CLIPBOARD_IMAGE_FORMATS: &[ClipboardImageFormat] = &[
+    ClipboardImageFormat {
+        name: "image/png",
+        extension: "png",
+    },
+    ClipboardImageFormat {
+        name: "PNG",
+        extension: "png",
+    },
+    ClipboardImageFormat {
+        name: "image/jpeg",
+        extension: "jpg",
+    },
+    ClipboardImageFormat {
+        name: "image/jpg",
+        extension: "jpg",
+    },
+    ClipboardImageFormat {
+        name: "image/bmp",
+        extension: "bmp",
+    },
+    ClipboardImageFormat {
+        name: "image/webp",
+        extension: "webp",
+    },
+];
 
 type AppResult<T> = Result<T, String>;
+
+struct ClipboardImageFormat {
+    name: &'static str,
+    extension: &'static str,
+}
+
+#[cfg(windows)]
+enum ClipboardFileInput {
+    Paths(Vec<String>),
+    Image {
+        bytes: Vec<u8>,
+        extension: &'static str,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -272,6 +313,55 @@ fn open_path_in_explorer(path: String) -> AppResult<()> {
     Ok(())
 }
 
+fn save_clipboard_image(bytes: Vec<u8>, extension: String) -> AppResult<String> {
+    if bytes.is_empty() {
+        return Err("Clipboard image is empty".to_string());
+    }
+
+    let extension = clean_image_extension(&extension)?;
+    let dir = paste_temp_file_dir();
+    fs::create_dir_all(&dir)
+        .map_err(|err| format!("Failed to create clipboard file cache directory: {err}"))?;
+
+    let path = dir.join(format!(
+        "clipboard-{}-{}.{}",
+        Utc::now().format("%Y%m%d-%H%M%S%.3f"),
+        Uuid::new_v4(),
+        extension
+    ));
+    fs::write(&path, bytes)
+        .map_err(|err| format!("Failed to save clipboard image '{}': {err}", path.display()))?;
+    Ok(path_to_string(path))
+}
+
+#[tauri::command]
+fn clear_paste_temp_files() -> AppResult<usize> {
+    let dir = paste_temp_file_dir();
+    if !dir.exists() {
+        return Ok(0);
+    }
+
+    let mut removed = 0;
+    let entries = fs::read_dir(&dir)
+        .map_err(|err| format!("Failed to read paste temp file directory: {err}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("Failed to read cache entry: {err}"))?;
+        let path = entry.path();
+        if path.is_file() && is_supported_cached_file_path(&path) {
+            fs::remove_file(&path)
+                .map_err(|err| format!("Failed to remove '{}': {err}", path.display()))?;
+            removed += 1;
+        }
+    }
+
+    Ok(removed)
+}
+
+#[tauri::command]
+fn save_system_clipboard_files() -> AppResult<Vec<String>> {
+    save_system_clipboard_files_impl()
+}
+
 #[tauri::command]
 fn terminal_create(
     app: AppHandle,
@@ -435,6 +525,8 @@ pub fn run() {
             check_executable_path,
             get_home_dir,
             open_path_in_explorer,
+            clear_paste_temp_files,
+            save_system_clipboard_files,
             terminal_create,
             terminal_write,
             terminal_resize,
@@ -649,6 +741,235 @@ fn clean_windows_path(path: &str) -> String {
         return stripped.to_string();
     }
     path.to_string()
+}
+
+fn clean_image_extension(extension: &str) -> AppResult<String> {
+    let extension = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => Ok(extension),
+        _ => Err(format!("Unsupported clipboard image type '{extension}'")),
+    }
+}
+
+fn paste_temp_file_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join(APP_DIR_NAME)
+        .join("paste-temp")
+}
+
+fn is_supported_cached_file_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            clean_image_extension(extension).is_ok()
+        })
+}
+
+#[cfg(windows)]
+fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        System::DataExchange::{
+            CloseClipboard, OpenClipboard, RegisterClipboardFormatW,
+        },
+    };
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
+    fn registered_format(name: &str) -> AppResult<u32> {
+        let mut wide: Vec<u16> = name.encode_utf16().collect();
+        wide.push(0);
+        let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
+        if format == 0 {
+            return Err(format!("Failed to register clipboard format '{name}'"));
+        }
+        Ok(format)
+    }
+
+    let mut opened = false;
+    for _ in 0..5 {
+        if unsafe { OpenClipboard(0 as HWND) } != 0 {
+            opened = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    if !opened {
+        return Err("Failed to open system clipboard".to_string());
+    }
+    let clipboard_input = {
+        let _guard = ClipboardGuard;
+
+        let file_paths = unsafe { read_clipboard_file_drop() };
+        if !file_paths.is_empty() {
+            return Ok(file_paths);
+        }
+
+        let mut image = None;
+        for image_format in CLIPBOARD_IMAGE_FORMATS {
+            let clipboard_format = registered_format(image_format.name)?;
+            let bytes = unsafe { read_clipboard_memory_format(clipboard_format) };
+            if let Some(bytes) = bytes {
+                image = Some(ClipboardFileInput::Image {
+                    bytes,
+                    extension: image_format.extension,
+                });
+                break;
+            }
+        }
+
+        if let Some(image) = image {
+            image
+        } else {
+            let dib_bytes = unsafe { read_clipboard_memory_format(8) };
+            if let Some(bytes) = dib_bytes {
+                ClipboardFileInput::Image {
+                    bytes: dib_to_bmp(bytes),
+                    extension: "bmp",
+                }
+            } else {
+                let dib_v5_bytes = unsafe { read_clipboard_memory_format(17) };
+                if let Some(bytes) = dib_v5_bytes {
+                    ClipboardFileInput::Image {
+                        bytes: dib_to_bmp(bytes),
+                        extension: "bmp",
+                    }
+                } else {
+                    ClipboardFileInput::Paths(Vec::new())
+                }
+            }
+        }
+    };
+
+    match clipboard_input {
+        ClipboardFileInput::Paths(paths) => Ok(paths),
+        ClipboardFileInput::Image { bytes, extension } => {
+            save_clipboard_image(bytes, extension.to_string()).map(|path| vec![path])
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn read_clipboard_memory_format(format: u32) -> Option<Vec<u8>> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::{
+        System::{
+            DataExchange::{GetClipboardData, IsClipboardFormatAvailable},
+            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+        },
+    };
+
+    if IsClipboardFormatAvailable(format) == 0 {
+        return None;
+    }
+
+    let handle = GetClipboardData(format);
+    if handle.is_null() {
+        return None;
+    }
+
+    let size = GlobalSize(handle as *mut c_void);
+    if size == 0 {
+        return None;
+    }
+
+    let pointer = GlobalLock(handle as *mut c_void);
+    if pointer.is_null() {
+        return None;
+    }
+
+    let bytes = std::slice::from_raw_parts(pointer as *const u8, size).to_vec();
+    GlobalUnlock(handle as *mut c_void);
+
+    Some(bytes)
+}
+
+#[cfg(windows)]
+fn dib_to_bmp(dib: Vec<u8>) -> Vec<u8> {
+    if dib.len() < 16 {
+        return dib;
+    }
+
+    let dib_header_size = u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]]) as usize;
+    let bit_count = u16::from_le_bytes([dib[14], dib[15]]);
+    let color_table_size = if bit_count <= 8 && dib_header_size >= 40 && dib.len() >= 36 {
+        let colors_used = u32::from_le_bytes([dib[32], dib[33], dib[34], dib[35]]) as usize;
+        let color_count = if colors_used > 0 {
+            colors_used
+        } else {
+            1_usize << bit_count
+        };
+        color_count.saturating_mul(4)
+    } else {
+        0
+    };
+    let pixel_offset = 14_usize
+        .saturating_add(dib_header_size)
+        .saturating_add(color_table_size);
+    let file_size = 14_usize.saturating_add(dib.len());
+
+    let mut bmp = Vec::with_capacity(file_size);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&(file_size as u32).to_le_bytes());
+    bmp.extend_from_slice(&[0, 0, 0, 0]);
+    bmp.extend_from_slice(&(pixel_offset as u32).to_le_bytes());
+    bmp.extend_from_slice(&dib);
+    bmp
+}
+
+#[cfg(windows)]
+unsafe fn read_clipboard_file_drop() -> Vec<String> {
+    use windows_sys::Win32::{
+        System::DataExchange::{GetClipboardData, IsClipboardFormatAvailable},
+        UI::Shell::{DragQueryFileW, HDROP},
+    };
+
+    const CF_HDROP: u32 = 15;
+
+    if IsClipboardFormatAvailable(CF_HDROP) == 0 {
+        return Vec::new();
+    }
+
+    let handle = GetClipboardData(CF_HDROP);
+    if handle.is_null() {
+        return Vec::new();
+    }
+
+    let drop_handle = handle as HDROP;
+    let count = DragQueryFileW(drop_handle, u32::MAX, std::ptr::null_mut(), 0);
+    let mut paths = Vec::new();
+
+    for index in 0..count {
+        let len = DragQueryFileW(drop_handle, index, std::ptr::null_mut(), 0);
+        if len == 0 {
+            continue;
+        }
+
+        let mut buffer = vec![0_u16; len as usize + 1];
+        let copied = DragQueryFileW(drop_handle, index, buffer.as_mut_ptr(), buffer.len() as u32);
+        if copied == 0 {
+            continue;
+        }
+
+        paths.push(String::from_utf16_lossy(&buffer[..copied as usize]));
+    }
+
+    paths
+}
+
+#[cfg(not(windows))]
+fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
+    Ok(Vec::new())
 }
 
 fn find_first_existing(paths: &[&str]) -> Option<String> {

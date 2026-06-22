@@ -11,6 +11,8 @@ The first MVP focuses on one workflow:
 4. Remember projects, tabs, active project, active tab, sidebar width, and theme before closing.
 5. Restore the previous workspace on the next launch.
 6. Scroll and reorder projects with the drag handle when many folders are configured.
+7. Insert file paths into the active terminal by dragging files, pasting copied
+   Explorer files, or pasting image-only clipboard content such as screenshots.
 
 ## Tech Stack
 
@@ -105,6 +107,8 @@ src/
     TerminalView.tsx          xterm.js lifecycle, input, resize handling
   services/
     tauriApi.ts               Tauri commands and event wrappers
+  utils/
+    terminalPaths.ts          Shell-aware terminal path quoting
 
 src-tauri/
   Cargo.toml                  Rust dependencies
@@ -151,6 +155,8 @@ Defined in `src-tauri/src/lib.rs`:
 - `get_shell_profiles() -> ShellProfile[]`
 - `get_home_dir() -> string`
 - `open_path_in_explorer(path: string)`
+- `save_system_clipboard_files() -> string[]`
+- `clear_paste_temp_files() -> number`
 - `terminal_create(request: TerminalCreateRequest) -> TerminalCreated`
 - `terminal_write(terminalId: string, data: string)`
 - `terminal_resize(terminalId: string, cols: number, rows: number)`
@@ -175,6 +181,11 @@ Backend events:
 8. xterm input calls `terminal_write`.
 9. ResizeObserver calls `terminal_resize`.
 10. Closing a tab calls `terminal_close`.
+
+File input uses the same terminal write path. `App.tsx` owns one Tauri
+drag/drop listener for the active terminal. `TerminalView.tsx` handles paste
+events before xterm consumes them, and `src/utils/terminalPaths.ts` formats
+paths for PowerShell, CMD, Git Bash, and WSL.
 
 ## Shell Profiles
 
@@ -212,6 +223,9 @@ This is important because users may install Git Bash outside
   backend PTY if the mount has no real size.
 - Add new Rust commands to `invoke_handler` and expose matching wrappers in
   `tauriApi.ts`.
+- Keep terminal file path quoting centralized in `src/utils/terminalPaths.ts`.
+- Keep drag/drop handling App-level so it does not register one global listener
+  per mounted terminal tab.
 - If splitting `App.tsx`, move project/tab mutations into a small store first,
   then split visual components.
 - Do not persist large terminal output by default. It can make startup slow and

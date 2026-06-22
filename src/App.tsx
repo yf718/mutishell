@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Circle,
   GripVertical,
+  Images,
   Pencil,
   Moon,
   Folder,
@@ -23,6 +25,7 @@ import { TerminalView } from "./components/TerminalView";
 import {
   closeTerminal,
   checkExecutablePath,
+  clearPasteTempFiles,
   createTerminal,
   getHomeDir,
   getShellProfiles,
@@ -33,6 +36,7 @@ import {
   pickProjectDirectory,
   saveAppState,
   resizeTerminal,
+  writeTerminal,
 } from "./services/tauriApi";
 import type {
   AppStateFile,
@@ -42,6 +46,7 @@ import type {
   SavedTab,
   ShellProfile,
 } from "./types";
+import { formatTerminalPaths } from "./utils/terminalPaths";
 
 const MAX_TERMINALS_PER_PROJECT = 5;
 const DEFAULT_SIDEBAR_WIDTH = 172;
@@ -160,6 +165,7 @@ export default function App() {
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [rightClickPaste, setRightClickPaste] = useState(false);
   const [copyOnSelect, setCopyOnSelect] = useState(false);
+  const [clearingPasteTempFiles, setClearingPasteTempFiles] = useState(false);
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
@@ -171,6 +177,7 @@ export default function App() {
   const saveTimer = useRef<number | null>(null);
   const lastSavedSnapshot = useRef<string | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
+  const activeTabIdRef = useRef<string | undefined>(undefined);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
   const topbarActionsRef = useRef<HTMLDivElement | null>(null);
   const tabActionsRef = useRef<HTMLDivElement | null>(null);
@@ -388,6 +395,22 @@ export default function App() {
     shellProfiles,
   ]);
 
+  const clearTempFiles = useCallback(async () => {
+    setClearingPasteTempFiles(true);
+    try {
+      const removed = await clearPasteTempFiles();
+      setError(
+        removed > 0
+          ? `已清理 ${removed} 个临时文件`
+          : "没有可清理的临时文件",
+      );
+    } catch (cacheError) {
+      setError(`清理临时文件失败: ${String(cacheError)}`);
+    } finally {
+      setClearingPasteTempFiles(false);
+    }
+  }, []);
+
   const removeProject = useCallback(
     (projectId: string) => {
       const projectTabs = tabs.filter((tab) => tab.projectId === projectId);
@@ -532,6 +555,63 @@ export default function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    const webview = getCurrentWebview();
+    let disposed = false;
+    let unlistenDragDrop: (() => void) | null = null;
+
+    void webview
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+
+        const activeTab = tabsRef.current.find(
+          (tab) => tab.id === activeTabIdRef.current,
+        );
+        if (
+          !activeTab ||
+          (activeTab.status !== "running" && activeTab.status !== "starting")
+        ) {
+          return;
+        }
+
+        const terminal = terminalRefs.current.get(activeTab.id);
+        const element = terminal?.element;
+        if (!terminal || !element) return;
+
+        const rect = element.getBoundingClientRect();
+        const scale = window.devicePixelRatio || 1;
+        const x = event.payload.position.x / scale;
+        const y = event.payload.position.y / scale;
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+          return;
+        }
+
+        const text = formatTerminalPaths(
+          event.payload.paths,
+          activeTab.shellProfileId,
+        );
+        if (!text) return;
+
+        terminal.focus();
+        void writeTerminal(activeTab.id, text).catch((error) =>
+          handleTerminalWriteError(activeTab.id, error),
+        );
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenDragDrop = unlisten;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlistenDragDrop?.();
+    };
+  }, [handleTerminalWriteError]);
 
   const renameActiveTab = useCallback(() => {
     if (!activeTab) return;
@@ -725,6 +805,10 @@ export default function App() {
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
 
   useEffect(() => {
     shellProfilesRef.current = shellProfiles;
@@ -960,6 +1044,15 @@ export default function App() {
             <span>{activeProject?.path ?? "添加项目后即可在该目录打开终端"}</span>
           </div>
           <div className="topbar-actions" ref={topbarActionsRef}>
+            <button
+              className="icon-button"
+              disabled={clearingPasteTempFiles}
+              onClick={() => void clearTempFiles()}
+              title="清理粘贴生成的临时文件"
+              type="button"
+            >
+              <Images size={17} />
+            </button>
             <button
               className="icon-button"
               onClick={() => setSettingsOpen(true)}

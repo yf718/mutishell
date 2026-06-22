@@ -23,6 +23,9 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
   disabled while search is active.
 - Toggle and persist light/dark UI theme.
 - Save state automatically with a short debounce.
+- Drag files onto the active terminal to insert quoted paths.
+- Paste copied Explorer files or image-only clipboard screenshots into the
+  active terminal as paths.
 
 ## Important Files
 
@@ -35,10 +38,15 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 - `src/services/tauriApi.ts`
   - All frontend/backend command names.
   - Add wrappers here before using commands in UI.
+- `src/utils/terminalPaths.ts`
+  - Shell-aware path formatting for PowerShell, CMD, Git Bash, and WSL.
 - `src/types.ts`
   - Frontend representation of Rust payloads.
 - `src-tauri/src/lib.rs`
   - Rust commands, PTY registry, shell profile detection, JSON persistence.
+- `docs/TERMINAL_FILE_INPUT.md`
+  - Terminal file drag/drop, copied file paste, screenshot paste temp files, and
+    cleanup behavior.
 
 ## Data Ownership
 
@@ -121,6 +129,12 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Keep hidden terminal views mounted so scrollback survives tab switching.
 - Do not hide inactive xterm mounts with `display: none`; it can make fit
   measure a tiny width and shrink the PTY after switching projects.
+- Keep file drag/drop as a single App-level Tauri webview listener. Registering
+  it inside every mounted terminal scales with total tab count.
+- Paste handling lives in `TerminalView` capture phase so it can intercept
+  image-only clipboard content before xterm's helper textarea consumes it.
+- Screenshot paste should prefer registered compressed image formats and fall
+  back to Windows `CF_DIB` / `CF_DIBV5` bitmap data.
 - Keep the xterm helper textarea anchored near the cursor for Windows IME.
   Chinese input candidates can appear in the wrong screen location in WebView2
   if the helper textarea keeps its off-screen default position.
@@ -173,5 +187,8 @@ Before handing off changes:
 - Drag the sidebar narrower and restart to confirm the width restores
 - Drag-sort projects and restart to confirm the order restores
 - Toggle light/dark theme and restart to confirm the theme restores
+- Drag a local file onto PowerShell and confirm a quoted path is inserted
+- Copy a file from Explorer and paste into the terminal
+- Copy a screenshot and confirm a temp file path is inserted
 - Switch away and back
 - Close and restart the app to confirm saved tabs restore

@@ -28,3 +28,9 @@ dirs = "6"
 portable-pty = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_UI_Shell",
+  "Win32_System_Memory",
+] }

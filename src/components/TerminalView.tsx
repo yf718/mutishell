@@ -3,8 +3,9 @@ import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { writeTerminal } from "../services/tauriApi";
+import { saveSystemClipboardFiles, writeTerminal } from "../services/tauriApi";
 import type { RuntimeTab } from "../types";
+import { formatTerminalPaths } from "../utils/terminalPaths";
 
 type TerminalViewProps = {
   tab: RuntimeTab;
@@ -173,9 +174,36 @@ function TerminalViewComponent({
     const handlePointerUp = () => {
       window.setTimeout(copySelection, 0);
     };
+    const insertPaths = (paths: string[]) => {
+      const text = formatTerminalPaths(paths, tab.shellProfileId);
+      if (!text) return;
+      terminal.focus();
+      void writeTerminal(tab.id, text).catch((error) =>
+        onWriteError(tab.id, error),
+      );
+    };
+    const handlePaste = (event: ClipboardEvent) => {
+      if (!activeRef.current) return;
+      if (statusRef.current !== "running" && statusRef.current !== "starting") {
+        return;
+      }
+
+      const types = Array.from(event.clipboardData?.types ?? []);
+      const hasTextData = types.some((type) =>
+        ["text/plain", "text/html", "text/uri-list"].includes(type),
+      );
+      if (hasTextData) return;
+
+      event.preventDefault();
+      void saveSystemClipboardFiles()
+        .then(insertPaths)
+        .catch((error) => onWriteError(tab.id, error));
+    };
     container.addEventListener("wheel", handleWheel, { passive: true });
     container.addEventListener("contextmenu", handleContextMenu);
     container.addEventListener("pointerup", handlePointerUp);
+    container.addEventListener("paste", handlePaste, true);
+
     const syncImeAnchor = () => {
       const textarea = terminal.textarea;
       if (!textarea || !terminal.element) return;
@@ -311,6 +339,7 @@ function TerminalViewComponent({
       container.removeEventListener("wheel", handleWheel);
       container.removeEventListener("contextmenu", handleContextMenu);
       container.removeEventListener("pointerup", handlePointerUp);
+      container.removeEventListener("paste", handlePaste, true);
       clearQueuedRefresh();
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
@@ -408,9 +437,10 @@ function TerminalViewComponent({
 export const TerminalView = memo(
   TerminalViewComponent,
   (previous, next) =>
-        previous.tab.id === next.tab.id &&
+    previous.tab.id === next.tab.id &&
     previous.active === next.active &&
     previous.tab.status === next.tab.status &&
+    previous.tab.shellProfileId === next.tab.shellProfileId &&
     previous.rightClickPaste === next.rightClickPaste &&
     previous.copyOnSelect === next.copyOnSelect &&
     previous.onWriteError === next.onWriteError,

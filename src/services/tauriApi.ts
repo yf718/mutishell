@@ -34,6 +34,14 @@ export function openPathInExplorer(path: string): Promise<void> {
   return invoke("open_path_in_explorer", { path });
 }
 
+export function clearPasteTempFiles(): Promise<number> {
+  return invoke("clear_paste_temp_files");
+}
+
+export function saveSystemClipboardFiles(): Promise<string[]> {
+  return invoke("save_system_clipboard_files");
+}
+
 export function createTerminal(
   request: TerminalCreateRequest,
 ): Promise<TerminalCreated> {
