@@ -954,6 +954,33 @@ button {
   grid-template-columns: 18px minmax(0, 1fr) 32px;
 }
 
+.setting-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.setting-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+}
+
+.setting-toggle em {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
 .settings-dialog footer {
   flex: none;
   padding: 14px 18px;

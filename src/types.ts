@@ -36,6 +36,7 @@ export type AppStateFile = {
   defaultShellProfileId: string;
   sidebarWidth?: number;
   theme?: AppTheme;
+  rightClickPaste?: boolean;
 };
 
 export type TerminalCreateRequest = {

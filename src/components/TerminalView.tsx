@@ -9,6 +9,7 @@ import type { RuntimeTab } from "../types";
 type TerminalViewProps = {
   tab: RuntimeTab;
   active: boolean;
+  rightClickPaste: boolean;
   onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
   onDispose: (terminalId: string) => void;
   onResize: (terminalId: string, cols: number, rows: number) => void;
@@ -17,6 +18,7 @@ type TerminalViewProps = {
 function TerminalViewComponent({
   tab,
   active,
+  rightClickPaste,
   onReady,
   onDispose,
   onResize,
@@ -29,6 +31,7 @@ function TerminalViewComponent({
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
+  const rightClickPasteRef = useRef(rightClickPaste);
   const composingRef = useRef(false);
   const imeAnchorFrameRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
@@ -38,6 +41,10 @@ function TerminalViewComponent({
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
+
+  useEffect(() => {
+    rightClickPasteRef.current = rightClickPaste;
+  }, [rightClickPaste]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -130,7 +137,20 @@ function TerminalViewComponent({
     const handleWheel = () => {
       queueRefresh();
     };
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!rightClickPasteRef.current || !activeRef.current) return;
+      event.preventDefault();
+      void navigator.clipboard
+        ?.readText()
+        .then((text) => {
+          if (text.length > 0) {
+            return writeTerminal(tab.id, text);
+          }
+        })
+        .catch(() => undefined);
+    };
     container.addEventListener("wheel", handleWheel, { passive: true });
+    container.addEventListener("contextmenu", handleContextMenu);
     const syncImeAnchor = () => {
       const textarea = terminal.textarea;
       if (!textarea || !terminal.element) return;
@@ -264,6 +284,7 @@ function TerminalViewComponent({
     return () => {
       inputDisposable.dispose();
       container.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("contextmenu", handleContextMenu);
       clearQueuedRefresh();
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
@@ -360,5 +381,8 @@ function TerminalViewComponent({
 
 export const TerminalView = memo(
   TerminalViewComponent,
-  (previous, next) => previous.tab.id === next.tab.id && previous.active === next.active,
+  (previous, next) =>
+    previous.tab.id === next.tab.id &&
+    previous.active === next.active &&
+    previous.rightClickPaste === next.rightClickPaste,
 );
