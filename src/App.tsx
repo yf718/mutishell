@@ -514,6 +514,25 @@ export default function App() {
     [startTerminal],
   );
 
+  const handleTerminalWriteError = useCallback(
+    (terminalId: string, writeError: unknown) => {
+      startedTerminals.current.delete(terminalId);
+      void closeTerminal(terminalId).catch(() => undefined);
+      setTabs((current) =>
+        current.map((tab) =>
+          tab.id === terminalId && tab.status !== "error"
+            ? {
+                ...tab,
+                status: "exited",
+                error: `终端输入已停止: ${String(writeError)}`,
+              }
+            : tab,
+        ),
+      );
+    },
+    [],
+  );
+
   const renameActiveTab = useCallback(() => {
     if (!activeTab) return;
     const title = window.prompt("重命名终端 Tab", activeTab.title)?.trim();
@@ -789,6 +808,7 @@ export default function App() {
 
     void onTerminalExit(({ terminalId }) => {
       startedTerminals.current.delete(terminalId);
+      void closeTerminal(terminalId).catch(() => undefined);
       setTabs((current) =>
         current.map((tab) =>
           tab.id === terminalId && tab.status !== "error"
@@ -1094,6 +1114,7 @@ export default function App() {
                   onDispose={unregisterTerminal}
                   onReady={registerTerminal}
                   onResize={resizeTerminalIfChanged}
+                  onWriteError={handleTerminalWriteError}
                   rightClickPaste={rightClickPaste}
                   tab={tab}
                 />

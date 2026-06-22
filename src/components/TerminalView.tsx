@@ -11,6 +11,7 @@ type TerminalViewProps = {
   active: boolean;
   rightClickPaste: boolean;
   copyOnSelect: boolean;
+  onWriteError: (terminalId: string, error: unknown) => void;
   onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
   onDispose: (terminalId: string) => void;
   onResize: (terminalId: string, cols: number, rows: number) => void;
@@ -21,6 +22,7 @@ function TerminalViewComponent({
   active,
   rightClickPaste,
   copyOnSelect,
+  onWriteError,
   onReady,
   onDispose,
   onResize,
@@ -33,6 +35,7 @@ function TerminalViewComponent({
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
+  const statusRef = useRef(tab.status);
   const rightClickPasteRef = useRef(rightClickPaste);
   const copyOnSelectRef = useRef(copyOnSelect);
   const composingRef = useRef(false);
@@ -44,6 +47,10 @@ function TerminalViewComponent({
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
+
+  useEffect(() => {
+    statusRef.current = tab.status;
+  }, [tab.status]);
 
   useEffect(() => {
     rightClickPasteRef.current = rightClickPaste;
@@ -137,15 +144,15 @@ function TerminalViewComponent({
       });
     };
     const inputDisposable = terminal.onData((data) => {
-      void writeTerminal(tab.id, data).catch((error) => {
-        terminal.writeln(`\r\n[mutishell] 写入终端失败: ${String(error)}`);
-      });
+      if (statusRef.current !== "running" && statusRef.current !== "starting") return;
+      void writeTerminal(tab.id, data).catch((error) => onWriteError(tab.id, error));
     });
     const handleWheel = () => {
       queueRefresh();
     };
     const handleContextMenu = (event: MouseEvent) => {
       if (!rightClickPasteRef.current || !activeRef.current) return;
+      if (statusRef.current !== "running" && statusRef.current !== "starting") return;
       event.preventDefault();
       void navigator.clipboard
         ?.readText()
@@ -401,8 +408,10 @@ function TerminalViewComponent({
 export const TerminalView = memo(
   TerminalViewComponent,
   (previous, next) =>
-    previous.tab.id === next.tab.id &&
+        previous.tab.id === next.tab.id &&
     previous.active === next.active &&
+    previous.tab.status === next.tab.status &&
     previous.rightClickPaste === next.rightClickPaste &&
-    previous.copyOnSelect === next.copyOnSelect,
+    previous.copyOnSelect === next.copyOnSelect &&
+    previous.onWriteError === next.onWriteError,
 );

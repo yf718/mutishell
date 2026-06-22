@@ -169,6 +169,12 @@ impl TerminalRegistry {
         Ok(())
     }
 
+    fn remove(&self, id: &str) -> AppResult<()> {
+        let mut terminals = self.terminals.lock().map_err(lock_error)?;
+        terminals.remove(id);
+        Ok(())
+    }
+
     fn close_all(&self) {
         let terminals: Result<Vec<TerminalProcess>, _> = self
             .terminals
@@ -332,6 +338,7 @@ fn terminal_create(
     let alive_for_reader = alive.clone();
     let app_for_reader = app.clone();
     let terminal_id_for_reader = terminal_id.clone();
+    let terminal_id_for_cleanup = terminal_id.clone();
 
     thread::Builder::new()
         .name(format!("terminal-reader-{terminal_id}"))
@@ -360,6 +367,8 @@ fn terminal_create(
                     terminal_id: terminal_id_for_reader,
                 },
             );
+            let registry = app_for_reader.state::<TerminalRegistry>();
+            let _ = registry.remove(&terminal_id_for_cleanup);
         })
         .map_err(|err| format!("Failed to start terminal reader: {err}"))?;
 
