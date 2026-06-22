@@ -33,6 +33,7 @@ function TerminalViewComponent({
   const imeAnchorFrameRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
+  const lastFitSizeRef = useRef("");
 
   useEffect(() => {
     activeRef.current = active;
@@ -200,9 +201,13 @@ function TerminalViewComponent({
     const fit = () => {
       try {
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
+        const previousSize = `${terminal.cols}x${terminal.rows}`;
         fitAddon.fit();
+        const nextSize = `${terminal.cols}x${terminal.rows}`;
+        const sizeChanged = previousSize !== nextSize || lastFitSizeRef.current !== nextSize;
+        lastFitSizeRef.current = nextSize;
         syncImeAnchor();
-        queueRefresh(true);
+        queueRefresh(sizeChanged);
         onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // xterm can throw if the element is detached during fast tab switching.

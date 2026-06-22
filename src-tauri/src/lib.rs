@@ -153,8 +153,11 @@ impl TerminalRegistry {
     }
 
     fn close(&self, id: &str) -> AppResult<()> {
-        let mut terminals = self.terminals.lock().map_err(lock_error)?;
-        if let Some(mut terminal) = terminals.remove(id) {
+        let terminal = {
+            let mut terminals = self.terminals.lock().map_err(lock_error)?;
+            terminals.remove(id)
+        };
+        if let Some(mut terminal) = terminal {
             terminal.alive.store(false, Ordering::SeqCst);
             let _ = terminal.child.kill();
             let _ = terminal.child.wait();
@@ -163,8 +166,12 @@ impl TerminalRegistry {
     }
 
     fn close_all(&self) {
-        if let Ok(mut terminals) = self.terminals.lock() {
-            for (_, mut terminal) in terminals.drain() {
+        let terminals: Result<Vec<TerminalProcess>, _> = self
+            .terminals
+            .lock()
+            .map(|mut terminals| terminals.drain().map(|(_, terminal)| terminal).collect());
+        if let Ok(terminals) = terminals {
+            for mut terminal in terminals {
                 terminal.alive.store(false, Ordering::SeqCst);
                 let _ = terminal.child.kill();
                 let _ = terminal.child.wait();
@@ -325,7 +332,7 @@ fn terminal_create(
     thread::Builder::new()
         .name(format!("terminal-reader-{terminal_id}"))
         .spawn(move || {
-            let mut buffer = [0_u8; 8192];
+            let mut buffer = [0_u8; 32768];
             while alive_for_reader.load(Ordering::SeqCst) {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,

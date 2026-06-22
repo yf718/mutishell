@@ -46,6 +46,13 @@ import type {
 const MAX_TERMINALS_PER_PROJECT = 5;
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 340;
+const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 256 * 1024;
+
+type TerminalOutputQueue = {
+  chunks: string[];
+  length: number;
+  index: number;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -102,6 +109,35 @@ function iconForProfile(profile?: ShellProfile) {
   return <SquareTerminal size={15} />;
 }
 
+function takeTerminalOutputBatch(queue: TerminalOutputQueue) {
+  const batch: string[] = [];
+  let batchLength = 0;
+
+  while (queue.index < queue.chunks.length) {
+    const chunk = queue.chunks[queue.index];
+    if (
+      batch.length > 0 &&
+      batchLength + chunk.length > MAX_TERMINAL_WRITE_CHARS_PER_FRAME
+    ) {
+      break;
+    }
+    queue.index += 1;
+    queue.length -= chunk.length;
+    batch.push(chunk);
+    batchLength += chunk.length;
+    if (batchLength >= MAX_TERMINAL_WRITE_CHARS_PER_FRAME) {
+      break;
+    }
+  }
+
+  if (queue.index > 64 && queue.index > queue.chunks.length / 2) {
+    queue.chunks = queue.chunks.slice(queue.index);
+    queue.index = 0;
+  }
+
+  return batch.length === 1 ? batch[0] : batch.join("");
+}
+
 export default function App() {
   const [hydrated, setHydrated] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -122,8 +158,9 @@ export default function App() {
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
-  const terminalOutputQueues = useRef(new Map<string, string>());
+  const terminalOutputQueues = useRef(new Map<string, TerminalOutputQueue>());
   const terminalOutputFrame = useRef<number | null>(null);
+  const terminalOutputActive = useRef(true);
   const terminalSizeRefs = useRef(new Map<string, string>());
   const startedTerminals = useRef(new Set<string>());
   const saveTimer = useRef<number | null>(null);
@@ -518,19 +555,41 @@ export default function App() {
 
   const flushTerminalOutput = useCallback(() => {
     terminalOutputFrame.current = null;
-    for (const [terminalId, data] of terminalOutputQueues.current) {
-      terminalOutputQueues.current.delete(terminalId);
+    let hasMoreOutput = false;
+    for (const [terminalId, queue] of terminalOutputQueues.current) {
+      const data = takeTerminalOutputBatch(queue);
+      if (queue.length === 0) {
+        terminalOutputQueues.current.delete(terminalId);
+      } else {
+        hasMoreOutput = true;
+      }
       if (data.length === 0) continue;
       terminalRefs.current.get(terminalId)?.write(data);
+    }
+    if (
+      hasMoreOutput &&
+      terminalOutputActive.current &&
+      terminalOutputFrame.current === null
+    ) {
+      terminalOutputFrame.current =
+        window.requestAnimationFrame(flushTerminalOutput);
     }
   }, []);
 
   const enqueueTerminalOutput = useCallback(
     (terminalId: string, data: string) => {
-      terminalOutputQueues.current.set(
-        terminalId,
-        (terminalOutputQueues.current.get(terminalId) ?? "") + data,
-      );
+      if (data.length === 0) return;
+      const queue = terminalOutputQueues.current.get(terminalId);
+      if (queue) {
+        queue.chunks.push(data);
+        queue.length += data.length;
+      } else {
+        terminalOutputQueues.current.set(terminalId, {
+          chunks: [data],
+          length: data.length,
+          index: 0,
+        });
+      }
 
       if (terminalOutputFrame.current === null) {
         terminalOutputFrame.current =
@@ -702,6 +761,7 @@ export default function App() {
     }).then((unlisten) => unlisteners.push(unlisten));
 
     return () => {
+      terminalOutputActive.current = false;
       for (const unlisten of unlisteners) unlisten();
       if (terminalOutputFrame.current !== null) {
         window.cancelAnimationFrame(terminalOutputFrame.current);
