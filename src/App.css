@@ -967,6 +967,10 @@ button {
   cursor: pointer;
 }
 
+.setting-toggle + .setting-toggle {
+  margin-top: 8px;
+}
+
 .setting-toggle input {
   width: 16px;
   height: 16px;

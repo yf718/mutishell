@@ -67,8 +67,10 @@ pub struct AppStateFile {
     pub sidebar_width: f64,
     #[serde(default = "default_theme")]
     pub theme: String,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub right_click_paste: bool,
+    #[serde(default)]
+    pub copy_on_select: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -453,7 +455,8 @@ fn default_app_state() -> AppStateFile {
         shell_profiles,
         sidebar_width: default_sidebar_width(),
         theme: default_theme(),
-        right_click_paste: true,
+        right_click_paste: false,
+        copy_on_select: false,
     }
 }
 
@@ -463,10 +466,6 @@ fn default_sidebar_width() -> f64 {
 
 fn default_theme() -> String {
     "dark".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_shell_profiles() -> Vec<ShellProfile> {

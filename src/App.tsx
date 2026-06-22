@@ -82,7 +82,8 @@ function defaultState(shellProfiles: ShellProfile[] = []): AppStateFile {
       shellProfiles.find((item) => item.detected)?.id ?? "powershell",
     sidebarWidth: 260,
     theme: "dark",
-    rightClickPaste: true,
+    rightClickPaste: false,
+    copyOnSelect: false,
   };
 }
 
@@ -156,7 +157,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [theme, setTheme] = useState<AppTheme>("dark");
-  const [rightClickPaste, setRightClickPaste] = useState(true);
+  const [rightClickPaste, setRightClickPaste] = useState(false);
+  const [copyOnSelect, setCopyOnSelect] = useState(false);
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
@@ -229,10 +231,12 @@ export default function App() {
       sidebarWidth: Math.round(sidebarWidth),
       theme,
       rightClickPaste,
+      copyOnSelect,
     };
   }, [
     activeProjectId,
     activeTabByProject,
+    copyOnSelect,
     defaultShellProfileId,
     projects,
     rightClickPaste,
@@ -674,7 +678,8 @@ export default function App() {
         setActiveTabByProject(restoredActiveTabs);
         setSidebarWidth(clampSidebarWidth(state.sidebarWidth ?? 260));
         setTheme(state.theme ?? "dark");
-        setRightClickPaste(state.rightClickPaste ?? true);
+        setRightClickPaste(state.rightClickPaste ?? false);
+        setCopyOnSelect(state.copyOnSelect ?? false);
         setHydrated(true);
       } catch (hydrateError) {
         const profiles = await getShellProfiles().catch(() => []);
@@ -1075,6 +1080,7 @@ export default function App() {
               {tabs.map((tab) => (
                 <TerminalView
                   active={tab.id === activeTabId && tab.projectId === activeProjectId}
+                  copyOnSelect={copyOnSelect}
                   key={tab.id}
                   onDispose={unregisterTerminal}
                   onReady={registerTerminal}
@@ -1145,7 +1151,9 @@ export default function App() {
       {settingsOpen && (
         <SettingsDialog
           defaultShellProfileId={defaultShellProfileId}
+          copyOnSelect={copyOnSelect}
           onClose={() => setSettingsOpen(false)}
+          onCopyOnSelectChange={setCopyOnSelect}
           onDefaultChange={setDefaultShellProfileId}
           onProfilesChange={setShellProfiles}
           onRemoveProject={removeProject}
@@ -1162,8 +1170,10 @@ export default function App() {
 type SettingsDialogProps = {
   shellProfiles: ShellProfile[];
   defaultShellProfileId: string;
+  copyOnSelect: boolean;
   projects: Project[];
   onClose: () => void;
+  onCopyOnSelectChange: (enabled: boolean) => void;
   onDefaultChange: (id: string) => void;
   onProfilesChange: (profiles: ShellProfile[]) => void;
   onRemoveProject: (projectId: string) => void;
@@ -1174,8 +1184,10 @@ type SettingsDialogProps = {
 function SettingsDialog({
   shellProfiles,
   defaultShellProfileId,
+  copyOnSelect,
   projects,
   onClose,
+  onCopyOnSelectChange,
   onDefaultChange,
   onProfilesChange,
   onRemoveProject,
@@ -1335,6 +1347,19 @@ function SettingsDialog({
 
           <section>
             <h2>终端行为</h2>
+            <label className="setting-toggle">
+              <input
+                checked={copyOnSelect}
+                onChange={(event) =>
+                  onCopyOnSelectChange(event.target.checked)
+                }
+                type="checkbox"
+              />
+              <span>
+                <strong>选中复制</strong>
+                <em>鼠标选中终端文本后自动复制到系统剪贴板</em>
+              </span>
+            </label>
             <label className="setting-toggle">
               <input
                 checked={rightClickPaste}

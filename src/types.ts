@@ -37,6 +37,7 @@ export type AppStateFile = {
   sidebarWidth?: number;
   theme?: AppTheme;
   rightClickPaste?: boolean;
+  copyOnSelect?: boolean;
 };
 
 export type TerminalCreateRequest = {
