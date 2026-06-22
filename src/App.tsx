@@ -122,7 +122,7 @@ export default function App() {
 
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
-  const terminalOutputQueues = useRef(new Map<string, string[]>());
+  const terminalOutputQueues = useRef(new Map<string, string>());
   const terminalOutputFrame = useRef<number | null>(null);
   const terminalSizeRefs = useRef(new Map<string, string>());
   const startedTerminals = useRef(new Set<string>());
@@ -518,21 +518,19 @@ export default function App() {
 
   const flushTerminalOutput = useCallback(() => {
     terminalOutputFrame.current = null;
-    for (const [terminalId, chunks] of terminalOutputQueues.current) {
+    for (const [terminalId, data] of terminalOutputQueues.current) {
       terminalOutputQueues.current.delete(terminalId);
-      if (chunks.length === 0) continue;
-      terminalRefs.current.get(terminalId)?.write(chunks.join(""));
+      if (data.length === 0) continue;
+      terminalRefs.current.get(terminalId)?.write(data);
     }
   }, []);
 
   const enqueueTerminalOutput = useCallback(
     (terminalId: string, data: string) => {
-      const queue = terminalOutputQueues.current.get(terminalId);
-      if (queue) {
-        queue.push(data);
-      } else {
-        terminalOutputQueues.current.set(terminalId, [data]);
-      }
+      terminalOutputQueues.current.set(
+        terminalId,
+        (terminalOutputQueues.current.get(terminalId) ?? "") + data,
+      );
 
       if (terminalOutputFrame.current === null) {
         terminalOutputFrame.current =

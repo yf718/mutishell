@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -14,7 +14,7 @@ type TerminalViewProps = {
   onResize: (terminalId: string, cols: number, rows: number) => void;
 };
 
-export function TerminalView({
+function TerminalViewComponent({
   tab,
   active,
   onReady,
@@ -45,13 +45,18 @@ export function TerminalView({
     const terminal = new Terminal({
       allowProposedApi: false,
       cursorBlink: true,
-      convertEol: true,
+      convertEol: false,
       fontFamily:
         "Cascadia Mono, CaskaydiaCove Nerd Font, Consolas, 'Courier New', monospace",
       fontSize: 13,
       lineHeight: 1.16,
+      scrollOnUserInput: true,
+      smoothScrollDuration: 0,
       scrollback: 8000,
       tabStopWidth: 4,
+      windowsPty: {
+        backend: "conpty",
+      },
       theme: {
         background: "#111318",
         foreground: "#d8dee9",
@@ -87,6 +92,19 @@ export function TerminalView({
         terminal.writeln(`\r\n[mutishell] 写入终端失败: ${String(error)}`);
       });
     });
+    let refreshFrame: number | null = null;
+    const queueScrollRefresh = () => {
+      if (refreshFrame !== null) return;
+      refreshFrame = window.requestAnimationFrame(() => {
+        refreshFrame = null;
+        if (!activeRef.current) return;
+        terminal.refresh(0, terminal.rows - 1);
+      });
+    };
+    const handleWheel = () => {
+      queueScrollRefresh();
+    };
+    container.addEventListener("wheel", handleWheel, { passive: true });
     const syncImeAnchor = () => {
       const textarea = terminal.textarea;
       if (!textarea || !terminal.element) return;
@@ -214,6 +232,11 @@ export function TerminalView({
 
     return () => {
       inputDisposable.dispose();
+      container.removeEventListener("wheel", handleWheel);
+      if (refreshFrame !== null) {
+        window.cancelAnimationFrame(refreshFrame);
+        refreshFrame = null;
+      }
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
         fitFrame = null;
@@ -306,3 +329,8 @@ export function TerminalView({
     </div>
   );
 }
+
+export const TerminalView = memo(
+  TerminalViewComponent,
+  (previous, next) => previous.tab.id === next.tab.id && previous.active === next.active,
+);

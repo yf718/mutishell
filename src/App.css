@@ -637,6 +637,12 @@ button {
 
 .terminal-mount .xterm {
   height: 100%;
+  isolation: isolate;
+}
+
+.terminal-mount .xterm-screen,
+.terminal-mount .xterm-rows {
+  contain: layout paint style;
 }
 
 .terminal-view.is-composing .xterm .xterm-helper-textarea {
