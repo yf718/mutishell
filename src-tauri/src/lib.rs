@@ -461,7 +461,7 @@ fn default_app_state() -> AppStateFile {
 }
 
 fn default_sidebar_width() -> f64 {
-    260.0
+    172.0
 }
 
 fn default_theme() -> String {

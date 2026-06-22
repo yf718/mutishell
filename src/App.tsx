@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import {
-  ChevronDown,
   Circle,
   GripVertical,
+  Pencil,
   Moon,
   Folder,
   FolderOpen,
@@ -44,8 +44,9 @@ import type {
 } from "./types";
 
 const MAX_TERMINALS_PER_PROJECT = 5;
-const MIN_SIDEBAR_WIDTH = 180;
-const MAX_SIDEBAR_WIDTH = 340;
+const DEFAULT_SIDEBAR_WIDTH = 172;
+const MIN_SIDEBAR_WIDTH = 112;
+const MAX_SIDEBAR_WIDTH = 220;
 const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 256 * 1024;
 
 type TerminalOutputQueue = {
@@ -80,7 +81,7 @@ function defaultState(shellProfiles: ShellProfile[] = []): AppStateFile {
     shellProfiles,
     defaultShellProfileId:
       shellProfiles.find((item) => item.detected)?.id ?? "powershell",
-    sidebarWidth: 260,
+    sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     theme: "dark",
     rightClickPaste: false,
     copyOnSelect: false,
@@ -155,7 +156,7 @@ export default function App() {
   const [newTerminalOpen, setNewTerminalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [rightClickPaste, setRightClickPaste] = useState(false);
   const [copyOnSelect, setCopyOnSelect] = useState(false);
@@ -171,6 +172,8 @@ export default function App() {
   const lastSavedSnapshot = useRef<string | null>(null);
   const tabsRef = useRef<RuntimeTab[]>([]);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
+  const topbarActionsRef = useRef<HTMLDivElement | null>(null);
+  const tabActionsRef = useRef<HTMLDivElement | null>(null);
   const draggedProjectId = useRef<string | null>(null);
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(
     null,
@@ -676,7 +679,9 @@ export default function App() {
             null,
         );
         setActiveTabByProject(restoredActiveTabs);
-        setSidebarWidth(clampSidebarWidth(state.sidebarWidth ?? 260));
+        setSidebarWidth(
+          clampSidebarWidth(state.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH),
+        );
         setTheme(state.theme ?? "dark");
         setRightClickPaste(state.rightClickPaste ?? false);
         setCopyOnSelect(state.copyOnSelect ?? false);
@@ -754,6 +759,29 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!newTerminalOpen) return;
+
+    const closeTerminalMenu = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (topbarActionsRef.current?.contains(target)) return;
+      if (tabActionsRef.current?.contains(target)) return;
+      if (
+        target instanceof Element &&
+        target.closest("[data-new-terminal-control]")
+      ) {
+        return;
+      }
+      setNewTerminalOpen(false);
+    };
+
+    window.addEventListener("pointerdown", closeTerminalMenu, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeTerminalMenu, true);
+    };
+  }, [newTerminalOpen]);
+
+  useEffect(() => {
     const unlisteners: Array<() => void> = [];
     void onTerminalData(({ terminalId, data }) => {
       enqueueTerminalOutput(terminalId, data);
@@ -824,17 +852,8 @@ export default function App() {
             <SquareTerminal size={22} />
             <div>
               <strong>mutishell</strong>
-              <span>Terminal workspace</span>
             </div>
           </div>
-          <button
-            className="icon-button"
-            onClick={() => setSettingsOpen(true)}
-            title="设置"
-            type="button"
-          >
-            <Settings size={18} />
-          </button>
         </div>
 
         <div className="search-box">
@@ -885,7 +904,7 @@ export default function App() {
                   title={project.path}
                 >
                   {active ? <FolderOpen size={17} /> : <Folder size={17} />}
-                  <span>{project.name}</span>
+                  <span className="project-name">{project.name}</span>
                   {count > 0 && <em>{count}</em>}
                   <span
                     className="project-drag-handle"
@@ -920,7 +939,15 @@ export default function App() {
             <strong>{activeProject?.name ?? "选择一个目录"}</strong>
             <span>{activeProject?.path ?? "添加项目后即可在该目录打开终端"}</span>
           </div>
-          <div className="topbar-actions">
+          <div className="topbar-actions" ref={topbarActionsRef}>
+            <button
+              className="icon-button"
+              onClick={() => setSettingsOpen(true)}
+              title="设置"
+              type="button"
+            >
+              <Settings size={17} />
+            </button>
             <button
               className="icon-button"
               onClick={() =>
@@ -935,49 +962,11 @@ export default function App() {
               <button
                 className="ghost-button"
                 onClick={() => void openPathInExplorer(activeProject.path)}
+                title="打开资源管理器"
                 type="button"
               >
                 <FolderOpen size={16} />
-                资源管理器
               </button>
-            )}
-            <button
-              className="primary-button"
-              disabled={
-                !activeProject ||
-                shellProfiles.length === 0 ||
-                tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
-              }
-              onClick={() => setNewTerminalOpen((current) => !current)}
-              type="button"
-              title={
-                tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
-                  ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
-                  : "新建终端"
-              }
-            >
-              <Plus size={16} />
-              新建终端
-              <ChevronDown size={14} />
-            </button>
-            {newTerminalOpen && activeProject && (
-              <div className="terminal-menu">
-                {shellProfiles.map((profile) => (
-                  <button
-                    disabled={
-                      !profile.detected ||
-                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
-                    }
-                    key={profile.id}
-                    onClick={() => createTab(activeProject, profile)}
-                    type="button"
-                  >
-                    {iconForProfile(profile)}
-                    <span>{profile.name}</span>
-                    {!profile.detected && <em>未检测到</em>}
-                  </button>
-                ))}
-              </div>
             )}
           </div>
         </header>
@@ -1042,9 +1031,26 @@ export default function App() {
                 })}
               </div>
               {activeTab && (
-                <div className="tab-actions">
+                <div className="tab-actions" ref={tabActionsRef}>
+                  <button
+                    className="icon-button"
+                    onClick={renameActiveTab}
+                    title="重命名当前 Tab"
+                    type="button"
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => void restartTab(activeTab)}
+                    title="重启当前终端"
+                    type="button"
+                  >
+                    <RefreshCw size={15} />
+                  </button>
                   <button
                     className="icon-button compact-add"
+                    data-new-terminal-control
                     disabled={tabsForProject.length >= MAX_TERMINALS_PER_PROJECT}
                     onClick={() => setNewTerminalOpen((current) => !current)}
                     title={
@@ -1056,22 +1062,25 @@ export default function App() {
                   >
                     <Plus size={15} />
                   </button>
-                  <button
-                    className="icon-button"
-                    onClick={() => void restartTab(activeTab)}
-                    title="重启当前终端"
-                    type="button"
-                  >
-                    <RefreshCw size={15} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    onClick={renameActiveTab}
-                    title="重命名当前 Tab"
-                    type="button"
-                  >
-                    <Settings size={15} />
-                  </button>
+                  {newTerminalOpen && activeProject && (
+                    <div className="terminal-menu tab-terminal-menu">
+                      {shellProfiles.map((profile) => (
+                        <button
+                          disabled={
+                            !profile.detected ||
+                            tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                          }
+                          key={profile.id}
+                          onClick={() => createTab(activeProject, profile)}
+                          type="button"
+                        >
+                          {iconForProfile(profile)}
+                          <span>{profile.name}</span>
+                          {!profile.detected && <em>未检测到</em>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
