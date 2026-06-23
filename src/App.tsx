@@ -170,7 +170,7 @@ export default function App() {
   const terminalRefs = useRef(new Map<string, Terminal>());
   const fitAddonRefs = useRef(new Map<string, FitAddon>());
   const terminalOutputQueues = useRef(new Map<string, TerminalOutputQueue>());
-  const terminalOutputFrame = useRef<number | null>(null);
+  const terminalOutputFlushScheduled = useRef(false);
   const terminalOutputActive = useRef(true);
   const terminalSizeRefs = useRef(new Map<string, string>());
   const startedTerminals = useRef(new Set<string>());
@@ -674,7 +674,7 @@ export default function App() {
   );
 
   const flushTerminalOutput = useCallback(() => {
-    terminalOutputFrame.current = null;
+    terminalOutputFlushScheduled.current = false;
     let hasMoreOutput = false;
     for (const [terminalId, queue] of terminalOutputQueues.current) {
       const data = takeTerminalOutputBatch(queue);
@@ -689,10 +689,10 @@ export default function App() {
     if (
       hasMoreOutput &&
       terminalOutputActive.current &&
-      terminalOutputFrame.current === null
+      !terminalOutputFlushScheduled.current
     ) {
-      terminalOutputFrame.current =
-        window.requestAnimationFrame(flushTerminalOutput);
+      terminalOutputFlushScheduled.current = true;
+      queueMicrotask(flushTerminalOutput);
     }
   }, []);
 
@@ -711,9 +711,9 @@ export default function App() {
         });
       }
 
-      if (terminalOutputFrame.current === null) {
-        terminalOutputFrame.current =
-          window.requestAnimationFrame(flushTerminalOutput);
+      if (!terminalOutputFlushScheduled.current) {
+        terminalOutputFlushScheduled.current = true;
+        queueMicrotask(flushTerminalOutput);
       }
     },
     [flushTerminalOutput],
@@ -915,10 +915,8 @@ export default function App() {
     return () => {
       terminalOutputActive.current = false;
       for (const unlisten of unlisteners) unlisten();
-      if (terminalOutputFrame.current !== null) {
-        window.cancelAnimationFrame(terminalOutputFrame.current);
-        flushTerminalOutput();
-      }
+      terminalOutputFlushScheduled.current = false;
+      flushTerminalOutput();
     };
   }, [enqueueTerminalOutput, flushTerminalOutput]);
 

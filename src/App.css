@@ -695,6 +695,10 @@ button {
   display: none;
 }
 
+.terminal-view.is-outputting .xterm .xterm-cursor {
+  visibility: hidden;
+}
+
 .terminal-view.is-composing .xterm .xterm-helper-textarea {
   position: fixed !important;
   left: var(--ime-anchor-fixed-left, 220px) !important;

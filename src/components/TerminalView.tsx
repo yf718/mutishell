@@ -45,6 +45,7 @@ function TerminalViewComponent({
   const imeAnchorFrameRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
+  const outputSettledTimeoutRef = useRef<number | null>(null);
   const lastFitSizeRef = useRef("");
 
   useEffect(() => {
@@ -149,6 +150,19 @@ function TerminalViewComponent({
     const inputDisposable = terminal.onData((data) => {
       if (statusRef.current !== "running" && statusRef.current !== "starting") return;
       void writeTerminal(tab.id, data).catch((error) => onWriteError(tab.id, error));
+    });
+    const hideCursorDuringOutput = () => {
+      viewRef.current?.classList.add("is-outputting");
+      if (outputSettledTimeoutRef.current !== null) {
+        window.clearTimeout(outputSettledTimeoutRef.current);
+      }
+      outputSettledTimeoutRef.current = window.setTimeout(() => {
+        outputSettledTimeoutRef.current = null;
+        viewRef.current?.classList.remove("is-outputting");
+      }, 64);
+    };
+    const writeParsedDisposable = terminal.onWriteParsed(() => {
+      hideCursorDuringOutput();
     });
     const handleWheel = () => {
       queueRefresh();
@@ -338,11 +352,16 @@ function TerminalViewComponent({
 
     return () => {
       inputDisposable.dispose();
+      writeParsedDisposable.dispose();
       container.removeEventListener("wheel", handleWheel);
       container.removeEventListener("contextmenu", handleContextMenu);
       container.removeEventListener("pointerup", handlePointerUp);
       container.removeEventListener("paste", handlePaste, true);
       clearQueuedRefresh();
+      if (outputSettledTimeoutRef.current !== null) {
+        window.clearTimeout(outputSettledTimeoutRef.current);
+        outputSettledTimeoutRef.current = null;
+      }
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
         fitFrame = null;
