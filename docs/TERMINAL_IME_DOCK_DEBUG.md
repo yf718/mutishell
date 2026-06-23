@@ -24,32 +24,31 @@ instead of guessing xterm cursor coordinates.
 
 ## Final Approach
 
-The current implementation intentionally docks xterm's helper textarea while the
-terminal is outputting, then releases it after output settles.
+The current implementation intentionally docks xterm's helper textarea all the
+time for active terminal views. This gives Windows IME and the touch keyboard one
+stable viewport anchor instead of letting them follow xterm's cursor through
+Codex redraws.
 
 - `TerminalView.tsx`
   - Adds `outputDockAnchorRef`.
-  - Tracks short TUI redraw bursts with `tuiSequenceWindowRef`.
-  - Uses `dockHelperTextareaDuringOutput()` to read the invisible anchor's
+  - Uses `dockHelperTextarea()` to read the invisible anchor's
     `getBoundingClientRect()` and store viewport coordinates in CSS variables.
-  - Uses `releaseHelperTextareaDock()` to remove those CSS variables.
-  - Uses `hideCursorDuringOutput()` to toggle `.is-outputting` for `160ms`.
-  - Uses `terminal.onWriteParsed()` as a broad fallback for normal streamed text.
-  - Registers CSI handlers for common TUI redraw/control sequences:
-    - private mode `?h` / `?l`
-    - params `25`, `2026`, `1047`, `1048`, `1049`
-    - cursor positioning `H` / `f`
-    - erase display/line `J` / `K`
+  - Refreshes the dock coordinates on mount, fit/resize, and active-terminal
+    focus.
+  - Keeps `.is-ime-docked` on the terminal view so the fixed helper textarea CSS
+    applies continuously.
+  - Uses `terminal.onWriteParsed()` and common CSI redraw/control handlers to
+    toggle `.is-outputting` briefly while terminal output is being parsed.
   - Renders an invisible `.terminal-output-dock` element with a span anchor.
 
 - `App.css`
-  - Hides `.xterm-cursor` while `.terminal-view.is-outputting`.
   - Fixes `.xterm-helper-textarea` to `--output-dock-*` viewport coordinates
-    while `.terminal-view.is-outputting`.
+    while `.terminal-view.is-ime-docked`.
   - Makes the docked helper textarea invisible, including text and caret, so it
     remains an IME anchor without showing duplicate typed/composition text near
     the bottom of the terminal.
-  - Hides `.composition-view` while outputting for the same reason.
+  - Hides `.composition-view` for the same reason.
+  - Hides `.xterm-cursor` only while `.terminal-view.is-outputting`.
   - Defines invisible `.terminal-output-dock` and
     `.terminal-output-dock-anchor`.
 
@@ -91,41 +90,55 @@ Temporary debug logging has been removed:
    Pure absolute positioning inside xterm did not give the OS a stable viewport
    coordinate.
 
-5. Invisible real dock anchor with fixed helper textarea.
+5. Invisible real dock anchor with fixed helper textarea during output.
 
-   This worked after two important additions:
+   This was mostly stable after two important additions:
 
    - Add `terminal.onWriteParsed()` so ordinary streamed text triggers the dock,
      not only CSI-heavy TUI redraws.
    - Keep the docked helper textarea visually transparent. Otherwise typed or
      composing text can appear both at the real prompt and near the dock.
 
+   However, the app could still briefly enter dock mode while the user was
+   typing at an idle Codex prompt, because Codex can emit small redraw/control
+   sequences even without visible AI output.
+
+6. Always-on fixed helper textarea dock.
+
+   This is the current approach. It gives up prompt-relative IME positioning in
+   favor of a single stable dock position. This avoids edge cases where output
+   detection, CSI detection, or release timing leaves the IME at a surprising
+   position.
+
 ## Tradeoff
 
-This approach intentionally gives up exact IME positioning during output. While
-Codex is streaming or redrawing, the helper textarea is docked near the terminal
-bottom. After output settles, xterm regains control and input returns to the
-actual prompt position.
+This approach intentionally gives up exact prompt-relative IME positioning. The
+helper textarea is docked near the terminal bottom even when the user is typing
+at an idle prompt.
 
-This is simpler and more robust than maintaining Codex-specific cursor rules.
+The xterm cursor is still hidden only during parsed output bursts. Codex redraws
+can otherwise show the cursor at intermediate output positions before returning
+it to the prompt.
 
 ## Validation Checklist
 
 Manual checks:
 
 - Run `codex` inside the app terminal.
-- Let Codex stream normal text.
-- While it streams, type Chinese and open the IME candidate bar.
-- Confirm the keyboard/candidate bar stays stable and does not jump to upper
-  output rows.
+- Type Chinese at an idle Codex prompt and open the IME candidate bar.
+- Let Codex stream normal text while the IME is active.
+- Confirm the keyboard/candidate bar stays stable at the dock and does not jump
+  to upper output rows.
 - Confirm the bottom dock does not show duplicate typed/composition text.
-- After output stops, confirm normal typing continues at the Codex prompt.
-- Switch tabs and resize the terminal; confirm the helper textarea is not stuck
-  at the dock.
+- Confirm the xterm cursor does not jump through intermediate Codex output rows
+  while Codex streams/redraws.
+- Confirm normal typing still appears at the Codex prompt.
+- Switch tabs and resize the terminal; confirm the helper textarea dock follows
+  the current terminal geometry.
 
 ## Last Known Verification
 
 - `npm run build` passed.
-- `cargo check` passed.
-- Manual testing confirmed the keyboard/candidate bar was stable after
-  `onWriteParsed()` was added and the docked helper textarea was made invisible.
+- Manual testing confirmed that the previous output-only dock was stable during
+  output but could still appear while typing at an idle prompt. The current
+  always-on dock intentionally makes that behavior consistent.

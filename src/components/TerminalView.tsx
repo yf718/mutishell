@@ -147,7 +147,7 @@ function TerminalViewComponent({
       if (statusRef.current !== "running" && statusRef.current !== "starting") return;
       void writeTerminal(tab.id, data).catch((error) => onWriteError(tab.id, error));
     });
-    const dockHelperTextareaDuringOutput = () => {
+    const dockHelperTextarea = () => {
       const view = viewRef.current;
       const anchor = outputDockAnchorRef.current;
       if (!view || !anchor) return;
@@ -172,7 +172,6 @@ function TerminalViewComponent({
       view.style.removeProperty("--output-dock-height");
     };
     const hideCursorDuringOutput = () => {
-      dockHelperTextareaDuringOutput();
       viewRef.current?.classList.add("is-outputting");
       if (outputSettledTimeoutRef.current !== null) {
         window.clearTimeout(outputSettledTimeoutRef.current);
@@ -180,7 +179,6 @@ function TerminalViewComponent({
       outputSettledTimeoutRef.current = window.setTimeout(() => {
         outputSettledTimeoutRef.current = null;
         viewRef.current?.classList.remove("is-outputting");
-        releaseHelperTextareaDock();
       }, 160);
     };
     const paramsInclude = (
@@ -311,6 +309,7 @@ function TerminalViewComponent({
         const nextSize = `${terminal.cols}x${terminal.rows}`;
         const sizeChanged = previousSize !== nextSize || lastFitSizeRef.current !== nextSize;
         lastFitSizeRef.current = nextSize;
+        dockHelperTextarea();
         queueRefresh(sizeChanged);
         onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
@@ -328,6 +327,7 @@ function TerminalViewComponent({
 
     const resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(container);
+    dockHelperTextarea();
     queueFit();
     onReady(tab.id, terminal, fitAddon);
 
@@ -349,6 +349,7 @@ function TerminalViewComponent({
         window.clearTimeout(outputSettledTimeoutRef.current);
         outputSettledTimeoutRef.current = null;
       }
+      viewRef.current?.classList.remove("is-outputting");
       releaseHelperTextareaDock();
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
@@ -384,6 +385,26 @@ function TerminalViewComponent({
         }
         fitAddon.fit();
         terminal.focus();
+        const anchor = outputDockAnchorRef.current;
+        if (anchor) {
+          const anchorRect = anchor.getBoundingClientRect();
+          viewRef.current?.style.setProperty(
+            "--output-dock-left",
+            `${anchorRect.left}px`,
+          );
+          viewRef.current?.style.setProperty(
+            "--output-dock-top",
+            `${anchorRect.top}px`,
+          );
+          viewRef.current?.style.setProperty(
+            "--output-dock-width",
+            `${Math.max(anchorRect.width, 120)}px`,
+          );
+          viewRef.current?.style.setProperty(
+            "--output-dock-height",
+            `${Math.max(anchorRect.height, 16)}px`,
+          );
+        }
         onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // Ignore transient layout reads while React is switching views.
@@ -400,7 +421,7 @@ function TerminalViewComponent({
 
   return (
     <div
-      className={["terminal-view", active ? "is-active" : ""]
+      className={["terminal-view", "is-ime-docked", active ? "is-active" : ""]
         .filter(Boolean)
         .join(" ")}
       aria-hidden={!active}

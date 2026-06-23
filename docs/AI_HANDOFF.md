@@ -130,11 +130,11 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
   `requestAnimationFrame`. Some TUIs emit cursor moves in adjacent PTY chunks;
   delaying writes until the next frame can expose intermediate cursor positions.
 - Codex CLI currently redraws in the normal buffer and repeatedly shows the
-  cursor at intermediate locations before moving it back to the prompt. Keep the
-  `TerminalView` `onWriteParsed` cursor-hiding debounce and
-  `.terminal-view.is-outputting` CSS unless a better xterm-level fix is proven.
-  The debounce is intentionally short (`64ms`) so normal shell prompts still show
-  their cursor after output settles.
+  cursor at intermediate locations before moving it back to the prompt.
+  `TerminalView` keeps the IME helper textarea docked via `.is-ime-docked`, but
+  still uses `onWriteParsed` plus common CSI redraw handlers to toggle
+  `.is-outputting` briefly and hide the xterm cursor during output bursts. Do not
+  remove that debounce unless a better xterm-level fix is proven.
 - Keep hidden terminal views mounted so scrollback survives tab switching.
 - Do not hide inactive xterm mounts with `display: none`; it can make fit
   measure a tiny width and shrink the PTY after switching projects.

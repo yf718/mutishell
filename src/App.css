@@ -699,7 +699,7 @@ button {
   visibility: hidden;
 }
 
-.terminal-view.is-outputting .xterm .xterm-helper-textarea {
+.terminal-view.is-ime-docked .xterm .xterm-helper-textarea {
   position: fixed !important;
   left: var(--output-dock-left, 0px) !important;
   top: var(--output-dock-top, calc(100vh - 32px)) !important;
@@ -712,10 +712,11 @@ button {
   color: transparent !important;
   caret-color: transparent !important;
   opacity: 0 !important;
+  pointer-events: none !important;
   z-index: 30 !important;
 }
 
-.terminal-view.is-outputting .xterm .composition-view {
+.terminal-view.is-ime-docked .xterm .composition-view {
   display: none !important;
 }
 
