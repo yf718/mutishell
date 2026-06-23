@@ -126,6 +126,15 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Closing a tab should call `terminal_close`.
 - Restart should remove the tab id from `startedTerminals`.
 - PTY output must be routed by `terminalId`; never broadcast output to all tabs.
+- Frontend terminal output is flushed with `queueMicrotask`, not
+  `requestAnimationFrame`. Some TUIs emit cursor moves in adjacent PTY chunks;
+  delaying writes until the next frame can expose intermediate cursor positions.
+- Codex CLI currently redraws in the normal buffer and repeatedly shows the
+  cursor at intermediate locations before moving it back to the prompt. Keep the
+  `TerminalView` `onWriteParsed` cursor-hiding debounce and
+  `.terminal-view.is-outputting` CSS unless a better xterm-level fix is proven.
+  The debounce is intentionally short (`64ms`) so normal shell prompts still show
+  their cursor after output settles.
 - Keep hidden terminal views mounted so scrollback survives tab switching.
 - Do not hide inactive xterm mounts with `display: none`; it can make fit
   measure a tiny width and shrink the PTY after switching projects.
