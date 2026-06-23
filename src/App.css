@@ -699,8 +699,45 @@ button {
   visibility: hidden;
 }
 
+.terminal-view.is-outputting .xterm .xterm-helper-textarea {
+  position: fixed !important;
+  left: var(--output-dock-left, 0px) !important;
+  top: var(--output-dock-top, calc(100vh - 32px)) !important;
+  width: var(--output-dock-width, 120px) !important;
+  height: var(--output-dock-height, 18px) !important;
+  line-height: var(--output-dock-height, 18px) !important;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  caret-color: transparent !important;
+  opacity: 0 !important;
+  z-index: 30 !important;
+}
+
+.terminal-view.is-outputting .xterm .composition-view {
+  display: none !important;
+}
+
 .terminal-view:not(.is-active) .xterm .xterm-helper-textarea {
   pointer-events: none;
+}
+
+.terminal-output-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  left: 16px;
+  z-index: -1;
+  height: 24px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.terminal-output-dock-anchor {
+  display: block;
+  width: 160px;
+  height: 18px;
 }
 
 .terminal-overlay {

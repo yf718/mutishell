@@ -31,6 +31,7 @@ function TerminalViewComponent({
 }: TerminalViewProps) {
   const viewRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const outputDockAnchorRef = useRef<HTMLSpanElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
@@ -40,6 +41,7 @@ function TerminalViewComponent({
   const refreshFrameRef = useRef<number | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
   const outputSettledTimeoutRef = useRef<number | null>(null);
+  const tuiSequenceWindowRef = useRef({ count: 0, startedAt: 0 });
   const lastFitSizeRef = useRef("");
 
   useEffect(() => {
@@ -145,7 +147,32 @@ function TerminalViewComponent({
       if (statusRef.current !== "running" && statusRef.current !== "starting") return;
       void writeTerminal(tab.id, data).catch((error) => onWriteError(tab.id, error));
     });
+    const dockHelperTextareaDuringOutput = () => {
+      const view = viewRef.current;
+      const anchor = outputDockAnchorRef.current;
+      if (!view || !anchor) return;
+      const anchorRect = anchor.getBoundingClientRect();
+      view.style.setProperty("--output-dock-left", `${anchorRect.left}px`);
+      view.style.setProperty("--output-dock-top", `${anchorRect.top}px`);
+      view.style.setProperty(
+        "--output-dock-width",
+        `${Math.max(anchorRect.width, 120)}px`,
+      );
+      view.style.setProperty(
+        "--output-dock-height",
+        `${Math.max(anchorRect.height, 16)}px`,
+      );
+    };
+    const releaseHelperTextareaDock = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.style.removeProperty("--output-dock-left");
+      view.style.removeProperty("--output-dock-top");
+      view.style.removeProperty("--output-dock-width");
+      view.style.removeProperty("--output-dock-height");
+    };
     const hideCursorDuringOutput = () => {
+      dockHelperTextareaDuringOutput();
       viewRef.current?.classList.add("is-outputting");
       if (outputSettledTimeoutRef.current !== null) {
         window.clearTimeout(outputSettledTimeoutRef.current);
@@ -153,11 +180,73 @@ function TerminalViewComponent({
       outputSettledTimeoutRef.current = window.setTimeout(() => {
         outputSettledTimeoutRef.current = null;
         viewRef.current?.classList.remove("is-outputting");
-      }, 64);
+        releaseHelperTextareaDock();
+      }, 160);
+    };
+    const paramsInclude = (
+      params: (number | number[])[],
+      values: ReadonlySet<number>,
+    ) =>
+      params.some((param) =>
+        Array.isArray(param)
+          ? param.some((value) => values.has(value))
+          : values.has(param),
+      );
+    const noteTuiSequence = (threshold = 4) => {
+      const now = performance.now();
+      const windowState = tuiSequenceWindowRef.current;
+      if (now - windowState.startedAt > 80) {
+        windowState.startedAt = now;
+        windowState.count = 0;
+      }
+      windowState.count += 1;
+      if (windowState.count >= threshold) {
+        hideCursorDuringOutput();
+      }
+    };
+    const handlePrivateMode = (params: (number | number[])[]) => {
+      if (paramsInclude(params, new Set([25, 2026, 1047, 1048, 1049]))) {
+        hideCursorDuringOutput();
+      }
+      return false;
+    };
+    const handleCursorPosition = (params: (number | number[])[]) => {
+      void params;
+      noteTuiSequence();
+      return false;
+    };
+    const handleErase = (params: (number | number[])[]) => {
+      void params;
+      noteTuiSequence(3);
+      return false;
     };
     const writeParsedDisposable = terminal.onWriteParsed(() => {
       hideCursorDuringOutput();
     });
+    const showCursorModeDisposable = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      handlePrivateMode,
+    );
+    const hideCursorModeDisposable = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "l" },
+      handlePrivateMode,
+    );
+    const cursorPositionDisposable = terminal.parser.registerCsiHandler(
+      { final: "H" },
+      handleCursorPosition,
+    );
+    const cursorPositionAltDisposable = terminal.parser.registerCsiHandler(
+      { final: "f" },
+      handleCursorPosition,
+    );
+    const eraseDisplayDisposable = terminal.parser.registerCsiHandler(
+      { final: "J" },
+      handleErase,
+    );
+    const eraseLineDisposable = terminal.parser.registerCsiHandler(
+      { final: "K" },
+      handleErase,
+    );
     const handleWheel = () => {
       queueRefresh();
     };
@@ -245,6 +334,12 @@ function TerminalViewComponent({
     return () => {
       inputDisposable.dispose();
       writeParsedDisposable.dispose();
+      showCursorModeDisposable.dispose();
+      hideCursorModeDisposable.dispose();
+      cursorPositionDisposable.dispose();
+      cursorPositionAltDisposable.dispose();
+      eraseDisplayDisposable.dispose();
+      eraseLineDisposable.dispose();
       container.removeEventListener("wheel", handleWheel);
       container.removeEventListener("contextmenu", handleContextMenu);
       container.removeEventListener("pointerup", handlePointerUp);
@@ -254,6 +349,7 @@ function TerminalViewComponent({
         window.clearTimeout(outputSettledTimeoutRef.current);
         outputSettledTimeoutRef.current = null;
       }
+      releaseHelperTextareaDock();
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
         fitFrame = null;
@@ -311,6 +407,9 @@ function TerminalViewComponent({
       ref={viewRef}
     >
       <div className="terminal-mount" ref={containerRef} />
+      <div className="terminal-output-dock" aria-hidden="true">
+        <span className="terminal-output-dock-anchor" ref={outputDockAnchorRef} />
+      </div>
     </div>
   );
 }
