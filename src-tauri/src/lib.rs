@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 const APP_DIR_NAME: &str = "mutishell";
 const STATE_FILE_NAME: &str = "state.json";
+const MAX_CLIPBOARD_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const CLIPBOARD_IMAGE_FORMATS: &[ClipboardImageFormat] = &[
     ClipboardImageFormat {
         name: "image/png",
@@ -818,7 +819,7 @@ fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
         let mut image = None;
         for image_format in CLIPBOARD_IMAGE_FORMATS {
             let clipboard_format = registered_format(image_format.name)?;
-            let bytes = unsafe { read_clipboard_memory_format(clipboard_format) };
+            let bytes = unsafe { read_clipboard_memory_format(clipboard_format)? };
             if let Some(bytes) = bytes {
                 image = Some(ClipboardFileInput::Image {
                     bytes,
@@ -831,14 +832,14 @@ fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
         if let Some(image) = image {
             image
         } else {
-            let dib_bytes = unsafe { read_clipboard_memory_format(8) };
+            let dib_bytes = unsafe { read_clipboard_memory_format(8)? };
             if let Some(bytes) = dib_bytes {
                 ClipboardFileInput::Image {
                     bytes: dib_to_bmp(bytes),
                     extension: "bmp",
                 }
             } else {
-                let dib_v5_bytes = unsafe { read_clipboard_memory_format(17) };
+                let dib_v5_bytes = unsafe { read_clipboard_memory_format(17)? };
                 if let Some(bytes) = dib_v5_bytes {
                     ClipboardFileInput::Image {
                         bytes: dib_to_bmp(bytes),
@@ -860,7 +861,7 @@ fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
 }
 
 #[cfg(windows)]
-unsafe fn read_clipboard_memory_format(format: u32) -> Option<Vec<u8>> {
+unsafe fn read_clipboard_memory_format(format: u32) -> AppResult<Option<Vec<u8>>> {
     use std::ffi::c_void;
     use windows_sys::Win32::{
         System::{
@@ -870,28 +871,34 @@ unsafe fn read_clipboard_memory_format(format: u32) -> Option<Vec<u8>> {
     };
 
     if IsClipboardFormatAvailable(format) == 0 {
-        return None;
+        return Ok(None);
     }
 
     let handle = GetClipboardData(format);
     if handle.is_null() {
-        return None;
+        return Ok(None);
     }
 
     let size = GlobalSize(handle as *mut c_void);
     if size == 0 {
-        return None;
+        return Ok(None);
+    }
+    if size > MAX_CLIPBOARD_IMAGE_BYTES {
+        return Err(format!(
+            "Clipboard image is too large: {:.1} MB, maximum is 20 MB",
+            size as f64 / 1024.0 / 1024.0,
+        ));
     }
 
     let pointer = GlobalLock(handle as *mut c_void);
     if pointer.is_null() {
-        return None;
+        return Ok(None);
     }
 
     let bytes = std::slice::from_raw_parts(pointer as *const u8, size).to_vec();
     GlobalUnlock(handle as *mut c_void);
 
-    Some(bytes)
+    Ok(Some(bytes))
 }
 
 #[cfg(windows)]

@@ -131,10 +131,12 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
   measure a tiny width and shrink the PTY after switching projects.
 - Keep file drag/drop as a single App-level Tauri webview listener. Registering
   it inside every mounted terminal scales with total tab count.
+- Terminal file insertion intentionally limits each operation to 10 paths.
 - Paste handling lives in `TerminalView` capture phase so it can intercept
   image-only clipboard content before xterm's helper textarea consumes it.
 - Screenshot paste should prefer registered compressed image formats and fall
-  back to Windows `CF_DIB` / `CF_DIBV5` bitmap data.
+  back to Windows `CF_DIB` / `CF_DIBV5` bitmap data. Clipboard image payloads
+  larger than 20 MB are rejected before copying them into process memory.
 - Keep the xterm helper textarea anchored near the cursor for Windows IME.
   Chinese input candidates can appear in the wrong screen location in WebView2
   if the helper textarea keeps its off-screen default position.

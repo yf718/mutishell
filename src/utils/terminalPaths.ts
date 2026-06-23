@@ -1,3 +1,10 @@
+export const MAX_TERMINAL_PATHS = 10;
+
+export type FormattedTerminalPaths = {
+  text: string;
+  omitted: number;
+};
+
 function quotePowerShellPath(path: string) {
   return `'${path.replace(/'/g, "''")}'`;
 }
@@ -37,11 +44,20 @@ export function quoteTerminalPath(path: string, shellProfileId: string) {
   return quoteCmdPath(path);
 }
 
-export function formatTerminalPaths(paths: string[], shellProfileId: string) {
+export function formatTerminalPaths(
+  paths: string[],
+  shellProfileId: string,
+): FormattedTerminalPaths {
   const normalized = paths.filter((path) => path.length > 0);
-  if (normalized.length === 0) return "";
-  return (
-    normalized.map((path) => quoteTerminalPath(path, shellProfileId)).join(" ") +
-    " "
-  );
+  if (normalized.length === 0) {
+    return { text: "", omitted: 0 };
+  }
+
+  const limited = normalized.slice(0, MAX_TERMINAL_PATHS);
+  return {
+    text:
+      limited.map((path) => quoteTerminalPath(path, shellProfileId)).join(" ") +
+      " ",
+    omitted: normalized.length - limited.length,
+  };
 }

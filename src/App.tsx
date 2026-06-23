@@ -46,7 +46,7 @@ import type {
   SavedTab,
   ShellProfile,
 } from "./types";
-import { formatTerminalPaths } from "./utils/terminalPaths";
+import { formatTerminalPaths, MAX_TERMINAL_PATHS } from "./utils/terminalPaths";
 
 const MAX_TERMINALS_PER_PROJECT = 5;
 const DEFAULT_SIDEBAR_WIDTH = 172;
@@ -556,6 +556,10 @@ export default function App() {
     [],
   );
 
+  const handleTerminalInputError = useCallback((message: string) => {
+    setError(message);
+  }, []);
+
   useEffect(() => {
     const webview = getCurrentWebview();
     let disposed = false;
@@ -587,11 +591,17 @@ export default function App() {
           return;
         }
 
-        const text = formatTerminalPaths(
+        const { text, omitted } = formatTerminalPaths(
           event.payload.paths,
           activeTab.shellProfileId,
         );
         if (!text) return;
+
+        if (omitted > 0) {
+          setError(
+            `一次最多插入 ${MAX_TERMINAL_PATHS} 个路径，已忽略 ${omitted} 个`,
+          );
+        }
 
         terminal.focus();
         void writeTerminal(activeTab.id, text).catch((error) =>
@@ -1205,6 +1215,7 @@ export default function App() {
                   copyOnSelect={copyOnSelect}
                   key={tab.id}
                   onDispose={unregisterTerminal}
+                  onInputError={handleTerminalInputError}
                   onReady={registerTerminal}
                   onResize={resizeTerminalIfChanged}
                   onWriteError={handleTerminalWriteError}

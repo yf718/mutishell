@@ -185,7 +185,8 @@ Backend events:
 File input uses the same terminal write path. `App.tsx` owns one Tauri
 drag/drop listener for the active terminal. `TerminalView.tsx` handles paste
 events before xterm consumes them, and `src/utils/terminalPaths.ts` formats
-paths for PowerShell, CMD, Git Bash, and WSL.
+paths for PowerShell, CMD, Git Bash, and WSL. A single drag/drop or copied-file
+paste inserts at most 10 paths; image-only clipboard content is capped at 20 MB.
 
 ## Shell Profiles
 

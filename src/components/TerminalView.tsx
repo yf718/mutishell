@@ -12,6 +12,7 @@ type TerminalViewProps = {
   active: boolean;
   rightClickPaste: boolean;
   copyOnSelect: boolean;
+  onInputError: (message: string) => void;
   onWriteError: (terminalId: string, error: unknown) => void;
   onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
   onDispose: (terminalId: string) => void;
@@ -23,6 +24,7 @@ function TerminalViewComponent({
   active,
   rightClickPaste,
   copyOnSelect,
+  onInputError,
   onWriteError,
   onReady,
   onDispose,
@@ -175,7 +177,7 @@ function TerminalViewComponent({
       window.setTimeout(copySelection, 0);
     };
     const insertPaths = (paths: string[]) => {
-      const text = formatTerminalPaths(paths, tab.shellProfileId);
+      const { text } = formatTerminalPaths(paths, tab.shellProfileId);
       if (!text) return;
       terminal.focus();
       void writeTerminal(tab.id, text).catch((error) =>
@@ -197,7 +199,7 @@ function TerminalViewComponent({
       event.preventDefault();
       void saveSystemClipboardFiles()
         .then(insertPaths)
-        .catch((error) => onWriteError(tab.id, error));
+        .catch((error) => onInputError(`粘贴文件失败: ${String(error)}`));
     };
     container.addEventListener("wheel", handleWheel, { passive: true });
     container.addEventListener("contextmenu", handleContextMenu);
@@ -443,5 +445,6 @@ export const TerminalView = memo(
     previous.tab.shellProfileId === next.tab.shellProfileId &&
     previous.rightClickPaste === next.rightClickPaste &&
     previous.copyOnSelect === next.copyOnSelect &&
+    previous.onInputError === next.onInputError &&
     previous.onWriteError === next.onWriteError,
 );

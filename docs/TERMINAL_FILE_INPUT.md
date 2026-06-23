@@ -26,6 +26,8 @@ paste handling.
   the event.
 - `src/utils/terminalPaths.ts` owns shell-aware path formatting used by both
   drag/drop and paste.
+- A single drag/drop or copied-file paste inserts at most 10 paths. Extra paths
+  are ignored.
 - If the paste event includes text-like data (`text/plain`, `text/html`, or
   `text/uri-list`), it is left to xterm's normal paste behavior.
 - Otherwise the frontend calls `saveSystemClipboardFiles()` and inserts any
@@ -60,11 +62,14 @@ It handles three cases in order:
    - Used for image-only clipboard content like screenshots.
    - Supported formats include `image/png`, `PNG`, `image/jpeg`, `image/jpg`,
      `image/bmp`, and `image/webp`.
+   - Rejects image payloads larger than 20 MB before copying them into process
+     memory.
    - Saves the image bytes under `%TEMP%\mutishell\paste-temp`.
    - Returns the generated temporary path.
 3. Windows bitmap clipboard formats
    - Falls back to `CF_DIB` and `CF_DIBV5` when compressed image formats are not
      available.
+   - Rejects bitmap payloads larger than 20 MB before converting them to BMP.
    - Wraps DIB bytes in a BMP file header and saves a `.bmp` file under
      `%TEMP%\mutishell\paste-temp`.
 
@@ -99,6 +104,7 @@ cargo check
 Manual checks:
 
 - Drag a local file onto PowerShell and confirm a quoted path is inserted.
+- Drag more than 10 files and confirm only the first 10 paths are inserted.
 - Copy a PDF from Explorer and paste into the terminal; the original PDF path
   should be inserted.
 - Copy a WeChat screenshot and paste into the terminal; a path under
