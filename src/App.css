@@ -722,36 +722,29 @@ button {
 }
 
 .terminal-view.is-composing .xterm .composition-view {
-  opacity: 0;
+  display: none !important;
 }
 
 .terminal-ime-dock {
   position: absolute;
   z-index: 30;
-  right: 16px;
-  bottom: 14px;
-  left: 16px;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
-  min-height: 54px;
+  height: 78px;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  background: rgba(31, 31, 31, 0.96);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1f1f1f;
   color: #e8edf3;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(10px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
 }
 
 .terminal-view.is-composing .terminal-ime-dock {
   opacity: 1;
-  transform: translateY(0);
 }
 
 .terminal-ime-prompt {
@@ -771,17 +764,54 @@ button {
   display: inline-flex;
   min-width: 120px;
   max-width: calc(100% - 62px);
-  height: 28px;
+  min-height: 32px;
   align-items: center;
   overflow: hidden;
   border-bottom: 2px solid #a6e3a1;
   color: #f4f7fb;
   font-family:
     Cascadia Mono, CaskaydiaCove Nerd Font, Consolas, "Courier New", monospace;
-  font-size: 15px;
-  line-height: 28px;
+  font-size: 18px;
+  line-height: 32px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.terminal-context-menu {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  width: 124px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: #20252d;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+}
+
+.terminal-context-menu button {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: transparent;
+  color: #edf2f7;
+  cursor: pointer;
+  text-align: left;
+}
+
+.terminal-context-menu button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.terminal-context-menu button:disabled {
+  color: #6f7b86;
+  cursor: not-allowed;
+}
+
+.terminal-context-menu button:disabled:hover {
+  background: transparent;
 }
 
 .terminal-overlay {

@@ -26,6 +26,9 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 - Drag files onto the active terminal to insert quoted paths.
 - Paste copied Explorer files or image-only clipboard screenshots into the
   active terminal as paths.
+- Right-click in a terminal to open a minimal copy/paste menu. Paste reuses the
+  copied-file and screenshot clipboard path handling before falling back to
+  plain text.
 
 ## Important Files
 
@@ -143,15 +146,20 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Terminal file insertion intentionally limits each operation to 10 paths.
 - Paste handling lives in `TerminalView` capture phase so it can intercept
   image-only clipboard content before xterm's helper textarea consumes it.
+- The terminal right-click menu lives in `TerminalView` and should remain small:
+  only copy and paste. Paste must call `saveSystemClipboardFiles()` first so
+  Explorer file copies and screenshots keep working, then fall back to
+  `terminal.paste(text)`. Do not write clipboard text directly to the PTY; a
+  trailing newline can auto-submit in TUIs such as opencode.
 - Screenshot paste should prefer registered compressed image formats and fall
   back to Windows `CF_DIB` / `CF_DIBV5` bitmap data. Clipboard image payloads
   larger than 20 MB are rejected before copying them into process memory.
-- Keep the xterm helper textarea anchored near the cursor for Windows IME.
-  Chinese input candidates can appear in the wrong screen location in WebView2
-  if the helper textarea keeps its off-screen default position.
-- During IME composition, the terminal view temporarily reserves bottom space
-  and re-fits xterm so the Windows candidate bar is less likely to cover the
-  prompt near the bottom edge.
+- Keep the xterm helper textarea anchored to the fixed bottom IME dock for
+  Windows IME. Chinese input candidates can appear in the wrong screen location
+  in WebView2 if the helper textarea keeps its off-screen default position.
+- During IME composition, show the bottom dock as an overlay only. Do not shrink
+  the terminal mount or re-fit xterm during composition; that makes terminal rows
+  jump while typing.
 - Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
   `src/App.tsx`.
 

@@ -13,6 +13,8 @@ The first MVP focuses on one workflow:
 6. Scroll and reorder projects with the drag handle when many folders are configured.
 7. Insert file paths into the active terminal by dragging files, pasting copied
    Explorer files, or pasting image-only clipboard content such as screenshots.
+8. Use a terminal right-click menu with copy and paste actions. Paste reuses the
+   same text, copied-file, and image clipboard handling as keyboard paste.
 
 ## Tech Stack
 
@@ -184,9 +186,10 @@ Backend events:
 
 File input uses the same terminal write path. `App.tsx` owns one Tauri
 drag/drop listener for the active terminal. `TerminalView.tsx` handles paste
-events before xterm consumes them, and `src/utils/terminalPaths.ts` formats
-paths for PowerShell, CMD, Git Bash, and WSL. A single drag/drop or copied-file
-paste inserts at most 10 paths; image-only clipboard content is capped at 20 MB.
+events before xterm consumes them, owns a small terminal right-click menu for
+copy/paste, and `src/utils/terminalPaths.ts` formats paths for PowerShell, CMD,
+Git Bash, and WSL. A single drag/drop or copied-file paste inserts at most 10
+paths; image-only clipboard content is capped at 20 MB.
 
 ## Shell Profiles
 
@@ -227,6 +230,13 @@ This is important because users may install Git Bash outside
 - Keep terminal file path quoting centralized in `src/utils/terminalPaths.ts`.
 - Keep drag/drop handling App-level so it does not register one global listener
   per mounted terminal tab.
+- Keep terminal right-click paste wired through `save_system_clipboard_files`
+  first, then fall back to `terminal.paste(text)`. This preserves copied-file
+  and screenshot paste behavior while letting xterm handle bracketed paste for
+  text.
+- Keep Windows IME anchored to the fixed bottom dock in `TerminalView`. Do not
+  resize/refit xterm during composition because that makes terminal rows jump
+  while typing.
 - If splitting `App.tsx`, move project/tab mutations into a small store first,
   then split visual components.
 - Do not persist large terminal output by default. It can make startup slow and

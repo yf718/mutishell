@@ -163,7 +163,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [theme, setTheme] = useState<AppTheme>("dark");
-  const [rightClickPaste, setRightClickPaste] = useState(false);
   const [copyOnSelect, setCopyOnSelect] = useState(false);
   const [clearingPasteTempFiles, setClearingPasteTempFiles] = useState(false);
 
@@ -240,7 +239,7 @@ export default function App() {
       defaultShellProfileId,
       sidebarWidth: Math.round(sidebarWidth),
       theme,
-      rightClickPaste,
+      rightClickPaste: false,
       copyOnSelect,
     };
   }, [
@@ -249,7 +248,6 @@ export default function App() {
     copyOnSelect,
     defaultShellProfileId,
     projects,
-    rightClickPaste,
     sidebarWidth,
     shellProfiles,
     tabs,
@@ -792,7 +790,6 @@ export default function App() {
           clampSidebarWidth(state.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH),
         );
         setTheme(state.theme ?? "dark");
-        setRightClickPaste(state.rightClickPaste ?? false);
         setCopyOnSelect(state.copyOnSelect ?? false);
         setHydrated(true);
       } catch (hydrateError) {
@@ -1217,7 +1214,6 @@ export default function App() {
                   onReady={registerTerminal}
                   onResize={resizeTerminalIfChanged}
                   onWriteError={handleTerminalWriteError}
-                  rightClickPaste={rightClickPaste}
                   tab={tab}
                 />
               ))}
@@ -1289,9 +1285,7 @@ export default function App() {
           onDefaultChange={setDefaultShellProfileId}
           onProfilesChange={setShellProfiles}
           onRemoveProject={removeProject}
-          onRightClickPasteChange={setRightClickPaste}
           projects={projects}
-          rightClickPaste={rightClickPaste}
           shellProfiles={shellProfiles}
         />
       )}
@@ -1309,8 +1303,6 @@ type SettingsDialogProps = {
   onDefaultChange: (id: string) => void;
   onProfilesChange: (profiles: ShellProfile[]) => void;
   onRemoveProject: (projectId: string) => void;
-  onRightClickPasteChange: (enabled: boolean) => void;
-  rightClickPaste: boolean;
 };
 
 function SettingsDialog({
@@ -1323,8 +1315,6 @@ function SettingsDialog({
   onDefaultChange,
   onProfilesChange,
   onRemoveProject,
-  onRightClickPasteChange,
-  rightClickPaste,
 }: SettingsDialogProps) {
   const [homeDir, setHomeDir] = useState("");
   const [defaultProfiles, setDefaultProfiles] = useState<ShellProfile[]>([]);
@@ -1490,19 +1480,6 @@ function SettingsDialog({
               <span>
                 <strong>选中复制</strong>
                 <em>鼠标选中终端文本后自动复制到系统剪贴板</em>
-              </span>
-            </label>
-            <label className="setting-toggle">
-              <input
-                checked={rightClickPaste}
-                onChange={(event) =>
-                  onRightClickPasteChange(event.target.checked)
-                }
-                type="checkbox"
-              />
-              <span>
-                <strong>右键粘贴</strong>
-                <em>在终端区域右键时粘贴系统剪贴板文本</em>
               </span>
             </label>
           </section>

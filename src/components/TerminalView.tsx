@@ -10,7 +10,6 @@ import { formatTerminalPaths } from "../utils/terminalPaths";
 type TerminalViewProps = {
   tab: RuntimeTab;
   active: boolean;
-  rightClickPaste: boolean;
   copyOnSelect: boolean;
   onInputError: (message: string) => void;
   onWriteError: (terminalId: string, error: unknown) => void;
@@ -22,7 +21,6 @@ type TerminalViewProps = {
 function TerminalViewComponent({
   tab,
   active,
-  rightClickPaste,
   copyOnSelect,
   onInputError,
   onWriteError,
@@ -32,16 +30,26 @@ function TerminalViewComponent({
 }: TerminalViewProps) {
   const [composing, setComposing] = useState(false);
   const [compositionText, setCompositionText] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    canCopy: boolean;
+    canPaste: boolean;
+  } | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imeDockAnchorRef = useRef<HTMLSpanElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const contextMenuActionsRef = useRef<{
+    copy: () => Promise<void>;
+    paste: () => Promise<void>;
+  } | null>(null);
   const activeRef = useRef(active);
   const statusRef = useRef(tab.status);
-  const rightClickPasteRef = useRef(rightClickPaste);
   const copyOnSelectRef = useRef(copyOnSelect);
   const composingRef = useRef(false);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const imeAnchorFrameRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
@@ -55,10 +63,6 @@ function TerminalViewComponent({
   useEffect(() => {
     statusRef.current = tab.status;
   }, [tab.status]);
-
-  useEffect(() => {
-    rightClickPasteRef.current = rightClickPaste;
-  }, [rightClickPaste]);
 
   useEffect(() => {
     copyOnSelectRef.current = copyOnSelect;
@@ -165,27 +169,51 @@ function TerminalViewComponent({
       hideCursorDuringOutput();
     });
     const handleWheel = () => {
+      setContextMenu(null);
       queueRefresh();
     };
+    const pasteFromSystemClipboard = async () => {
+      if (statusRef.current !== "running" && statusRef.current !== "starting") {
+        return;
+      }
+
+      const paths = await saveSystemClipboardFiles().catch((error) => {
+        onInputError(`粘贴文件失败: ${String(error)}`);
+        return [];
+      });
+      if (paths.length > 0) {
+        insertPaths(paths);
+        return;
+      }
+
+      const text = await navigator.clipboard?.readText().catch(() => "");
+      if (text && text.length > 0) {
+        terminal.focus();
+        // Keep xterm paste semantics so bracketed paste protects multiline text in TUIs.
+        terminal.paste(text);
+      }
+    };
+    const copyCurrentSelection = async () => {
+      const selection = terminal.getSelection();
+      if (selection.length > 0) {
+        await navigator.clipboard?.writeText(selection);
+      }
+    };
     const handleContextMenu = (event: MouseEvent) => {
-      if (!rightClickPasteRef.current || !activeRef.current) return;
-      if (statusRef.current !== "running" && statusRef.current !== "starting") return;
+      if (!activeRef.current) return;
       event.preventDefault();
-      void navigator.clipboard
-        ?.readText()
-        .then((text) => {
-          if (text.length > 0) {
-            return writeTerminal(tab.id, text);
-          }
-        })
-        .catch(() => undefined);
+      terminal.focus();
+      setContextMenu({
+        x: Math.max(8, Math.min(event.clientX, window.innerWidth - 132)),
+        y: Math.max(8, Math.min(event.clientY, window.innerHeight - 76)),
+        canCopy: terminal.getSelection().length > 0,
+        canPaste:
+          statusRef.current === "running" || statusRef.current === "starting",
+      });
     };
     const copySelection = () => {
       if (!copyOnSelectRef.current || !activeRef.current) return;
-      const selection = terminal.getSelection();
-      if (selection.length > 0) {
-        void navigator.clipboard?.writeText(selection).catch(() => undefined);
-      }
+      void copyCurrentSelection().catch(() => undefined);
     };
     const handlePointerUp = () => {
       window.setTimeout(copySelection, 0);
@@ -215,77 +243,73 @@ function TerminalViewComponent({
         .then(insertPaths)
         .catch((error) => onInputError(`粘贴文件失败: ${String(error)}`));
     };
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        contextMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setContextMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+    contextMenuActionsRef.current = {
+      copy: copyCurrentSelection,
+      paste: pasteFromSystemClipboard,
+    };
     container.addEventListener("wheel", handleWheel, { passive: true });
     container.addEventListener("contextmenu", handleContextMenu);
     container.addEventListener("pointerup", handlePointerUp);
     container.addEventListener("paste", handlePaste, true);
+    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    window.addEventListener("keydown", handleKeyDown);
 
     const syncImeAnchor = () => {
       const textarea = terminal.textarea;
-      if (!textarea || !terminal.element) return;
-      if (!composingRef.current) return;
-      const screen = terminal.element.querySelector(".xterm-screen");
-      const compositionView = terminal.element.querySelector<HTMLElement>(
-        ".composition-view",
-      );
-      const screenRect = screen?.getBoundingClientRect();
-      if (!screenRect || screenRect.width <= 0 || screenRect.height <= 0) {
+      const dockAnchor = imeDockAnchorRef.current;
+      if (!textarea || !dockAnchor) return;
+      const anchorRect = dockAnchor.getBoundingClientRect();
+      if (anchorRect.width <= 0 || anchorRect.height <= 0) {
         return;
       }
 
-      const cellWidth = screenRect.width / Math.max(terminal.cols, 1);
-      const cellHeight = screenRect.height / Math.max(terminal.rows, 1);
-      const dockAnchorRect = imeDockAnchorRef.current?.getBoundingClientRect();
-      const cursorX = Math.min(
-        terminal.buffer.active.cursorX,
-        Math.max(terminal.cols - 1, 0),
-      );
-      const cursorY = Math.min(
-        terminal.buffer.active.cursorY,
-        Math.max(terminal.rows - 1, 0),
-      );
-      const cursorTop = cursorY * cellHeight;
-      const top = Math.max(
-        0,
-        dockAnchorRect ? dockAnchorRect.top - screenRect.top : cursorTop,
-      );
-      const left = dockAnchorRect
-        ? dockAnchorRect.left - screenRect.left
-        : cursorX * cellWidth;
-      const fixedLeft = dockAnchorRect?.left ?? screenRect.left + left;
-      const fixedTop = dockAnchorRect?.top ?? screenRect.top + top;
-      viewRef.current?.style.setProperty("--ime-anchor-left", `${left}px`);
-      viewRef.current?.style.setProperty("--ime-anchor-top", `${top}px`);
-      viewRef.current?.style.setProperty("--ime-anchor-fixed-left", `${fixedLeft}px`);
-      viewRef.current?.style.setProperty("--ime-anchor-fixed-top", `${fixedTop}px`);
+      const width = Math.max(anchorRect.width, 120);
+      const height = Math.max(anchorRect.height, 24);
       viewRef.current?.style.setProperty(
-        "--ime-anchor-width",
-        `${dockAnchorRect ? Math.max(dockAnchorRect.width, 120) : Math.max(cellWidth, 16)}px`,
+        "--ime-anchor-fixed-left",
+        `${anchorRect.left}px`,
       );
+      viewRef.current?.style.setProperty(
+        "--ime-anchor-fixed-top",
+        `${anchorRect.top}px`,
+      );
+      viewRef.current?.style.setProperty("--ime-anchor-width", `${width}px`);
       viewRef.current?.style.setProperty(
         "--ime-anchor-height",
-        `${Math.max(cellHeight, 16)}px`,
+        `${height}px`,
       );
-      textarea.style.left = `${left}px`;
-      textarea.style.top = `${top}px`;
-      if (dockAnchorRect) {
-        textarea.style.position = "fixed";
-        textarea.style.left = `${fixedLeft}px`;
-        textarea.style.top = `${fixedTop}px`;
-      } else {
-        textarea.style.position = "absolute";
-      }
-      textarea.style.width = `${
-        dockAnchorRect ? Math.max(dockAnchorRect.width, 120) : Math.max(cellWidth, 16)
-      }px`;
-      textarea.style.height = `${Math.max(cellHeight, 16)}px`;
-      textarea.style.lineHeight = `${cellHeight}px`;
-      textarea.style.zIndex = "20";
-      if (compositionView) {
-        compositionView.style.left = `${left}px`;
-        compositionView.style.top = `${top}px`;
-        compositionView.style.lineHeight = `${cellHeight}px`;
-      }
+      textarea.style.position = "fixed";
+      textarea.style.left = `${anchorRect.left}px`;
+      textarea.style.top = `${anchorRect.top}px`;
+      textarea.style.width = `${width}px`;
+      textarea.style.height = `${height}px`;
+      textarea.style.lineHeight = `${height}px`;
+      textarea.style.zIndex = composingRef.current ? "30" : "-5";
+    };
+    const resetImeAnchor = () => {
+      if (!terminal.textarea) return;
+      terminal.textarea.style.position = "absolute";
+      terminal.textarea.style.left = "";
+      terminal.textarea.style.top = "";
+      terminal.textarea.style.width = "";
+      terminal.textarea.style.height = "";
+      terminal.textarea.style.lineHeight = "";
+      terminal.textarea.style.zIndex = "";
     };
     const fit = () => {
       try {
@@ -317,27 +341,30 @@ function TerminalViewComponent({
         syncImeAnchor();
       });
     };
+    const forceImeAnchorSync = () => {
+      syncImeAnchor();
+      queueImeAnchorSync();
+      window.setTimeout(syncImeAnchor, 0);
+      window.setTimeout(syncImeAnchor, 32);
+    };
     const handleCompositionStart = () => {
       composingRef.current = true;
       setComposing(true);
       setCompositionText("");
-      queueImeAnchorSync();
+      forceImeAnchorSync();
     };
     const handleCompositionUpdate = (event: CompositionEvent) => {
       setCompositionText(event.data);
-      queueImeAnchorSync();
+      forceImeAnchorSync();
     };
     const handleCompositionEnd = () => {
       composingRef.current = false;
-      if (terminal.textarea) {
-        terminal.textarea.style.position = "absolute";
-        terminal.textarea.style.zIndex = "";
-      }
+      resetImeAnchor();
       setComposing(false);
       setCompositionText("");
     };
     const keepDockImeAnchor = () => {
-      queueImeAnchorSync();
+      forceImeAnchorSync();
     };
     terminal.textarea?.addEventListener("compositionstart", handleCompositionStart);
     terminal.textarea?.addEventListener("compositionupdate", handleCompositionUpdate);
@@ -357,6 +384,9 @@ function TerminalViewComponent({
       container.removeEventListener("contextmenu", handleContextMenu);
       container.removeEventListener("pointerup", handlePointerUp);
       container.removeEventListener("paste", handlePaste, true);
+      document.removeEventListener("pointerdown", handleDocumentPointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+      contextMenuActionsRef.current = null;
       clearQueuedRefresh();
       if (outputSettledTimeoutRef.current !== null) {
         window.clearTimeout(outputSettledTimeoutRef.current);
@@ -390,7 +420,7 @@ function TerminalViewComponent({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [onDispose, onReady, onResize, tab.id]);
+  }, [onDispose, onInputError, onReady, onResize, onWriteError, tab.id, tab.shellProfileId]);
 
   useEffect(() => {
     if (!active || !fitAddonRef.current || !terminalRef.current) {
@@ -451,6 +481,40 @@ function TerminalViewComponent({
           {compositionText || " "}
         </span>
       </div>
+      {contextMenu && active && (
+        <div
+          className="terminal-context-menu"
+          ref={contextMenuRef}
+          role="menu"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+        >
+          <button
+            disabled={!contextMenu.canCopy}
+            onClick={() => {
+              setContextMenu(null);
+              void contextMenuActionsRef.current?.copy();
+            }}
+            role="menuitem"
+            type="button"
+          >
+            复制
+          </button>
+          <button
+            disabled={!contextMenu.canPaste}
+            onClick={() => {
+              setContextMenu(null);
+              void contextMenuActionsRef.current?.paste();
+            }}
+            role="menuitem"
+            type="button"
+          >
+            粘贴
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -462,7 +526,6 @@ export const TerminalView = memo(
     previous.active === next.active &&
     previous.tab.status === next.tab.status &&
     previous.tab.shellProfileId === next.tab.shellProfileId &&
-    previous.rightClickPaste === next.rightClickPaste &&
     previous.copyOnSelect === next.copyOnSelect &&
     previous.onInputError === next.onInputError &&
     previous.onWriteError === next.onWriteError,
