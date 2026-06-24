@@ -903,7 +903,11 @@ export default function App() {
       setTabs((current) =>
         current.map((tab) =>
           tab.id === terminalId && tab.status !== "error"
-            ? { ...tab, status: "exited" }
+            ? {
+                ...tab,
+                status: "exited",
+                error: "PTY 输出流已结束，终端会话不再接收输出。",
+              }
             : tab,
         ),
       );
@@ -1252,6 +1256,19 @@ export default function App() {
                   >
                     <RefreshCw size={15} />
                     重试
+                  </button>
+                </div>
+              )}
+              {activeTab?.status === "exited" && (
+                <div className="terminal-overlay">
+                  <strong>终端连接已断开</strong>
+                  <span>{activeTab.error || "后台 PTY 已结束，可重启该终端。"}</span>
+                  <button
+                    onClick={() => void restartTab(activeTab)}
+                    type="button"
+                  >
+                    <RefreshCw size={15} />
+                    重启
                   </button>
                 </div>
               )}
