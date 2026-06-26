@@ -35,8 +35,13 @@ paste handling.
   drag/drop and paste.
 - A single drag/drop or copied-file paste inserts at most 10 paths. Extra paths
   are ignored.
-- If the paste event includes text-like data (`text/plain`, `text/html`, or
-  `text/uri-list`), it is left to xterm's normal paste behavior.
+- If the paste event includes `text/plain`, the frontend prevents the browser
+  default, checks `saveSystemClipboardFiles()` first, and only calls
+  `terminal.paste(text)` when no file or screenshot paths are available. This
+  matches right-click paste behavior and preserves one bracketed paste sequence
+  for multiline text.
+- If the paste event only includes `text/html` or `text/uri-list`, it is left
+  to xterm's normal paste behavior.
 - Otherwise the frontend calls `saveSystemClipboardFiles()` and inserts any
   returned paths.
 
@@ -97,6 +102,8 @@ Generated files are written to:
 The topbar cleanup button is labeled `清理临时文件`. It calls
 `clear_paste_temp_files` and removes only supported generated image files from
 that directory. It does not delete files that were copied from Explorer.
+The close-all-terminal button sits immediately to the left of this cleanup
+button and only closes terminal tabs/PTYs; it does not remove paste temp files.
 
 ## Verification
 
@@ -116,6 +123,8 @@ Manual checks:
   should be inserted.
 - Copy a PDF from Explorer, right-click the terminal, choose `粘贴`, and confirm
   the original PDF path is inserted.
+- Copy multiline text and paste into an interactive TUI such as Codex; it should
+  arrive as one paste instead of submitting at the first newline.
 - Copy a WeChat screenshot and paste into the terminal; a path under
   `%TEMP%\mutishell\paste-temp` should be inserted.
 - Copy a WeChat screenshot, right-click the terminal, choose `粘贴`, and confirm

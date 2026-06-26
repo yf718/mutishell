@@ -15,6 +15,7 @@ The first MVP focuses on one workflow:
    Explorer files, or pasting image-only clipboard content such as screenshots.
 8. Use a terminal right-click menu with copy and paste actions. Paste reuses the
    same text, copied-file, and image clipboard handling as keyboard paste.
+9. Close every terminal tab and backend PTY from the topbar.
 
 ## Tech Stack
 
@@ -163,13 +164,15 @@ Defined in `src-tauri/src/lib.rs`:
 - `terminal_write(terminalId: string, data: string)`
 - `terminal_resize(terminalId: string, cols: number, rows: number)`
 - `terminal_close(terminalId: string)`
+- `terminal_close_instance(terminalId: string, instanceId: string)`
+- `terminal_close_all()`
 
 Backend events:
 
 - `terminal://data`
-  - payload: `{ terminalId: string, data: string }`
+  - payload: `{ terminalId: string, instanceId: string, data: string }`
 - `terminal://exit`
-  - payload: `{ terminalId: string }`
+  - payload: `{ terminalId: string, instanceId: string }`
 
 ## Terminal Lifecycle
 
@@ -183,6 +186,12 @@ Backend events:
 8. xterm input calls `terminal_write`.
 9. ResizeObserver calls `terminal_resize`.
 10. Closing a tab calls `terminal_close`.
+11. The topbar close-all control calls `terminal_close_all`, clears all saved
+    tab definitions, and removes active-tab selections.
+
+Each `terminal_create` call carries a frontend-generated `terminalInstanceId`.
+Frontend event handlers ignore `terminal://data` and `terminal://exit` events
+whose `instanceId` no longer matches the active process for that tab.
 
 File input uses the same terminal write path. `App.tsx` owns one Tauri
 drag/drop listener for the active terminal. `TerminalView.tsx` handles paste
@@ -227,6 +236,9 @@ This is important because users may install Git Bash outside
   backend PTY if the mount has no real size.
 - Add new Rust commands to `invoke_handler` and expose matching wrappers in
   `tauriApi.ts`.
+- Keep the topbar close-all action wired through `terminal_close_all` so all
+  live PTY processes are closed even when their tabs belong to inactive
+  projects.
 - Keep terminal file path quoting centralized in `src/utils/terminalPaths.ts`.
 - Keep drag/drop handling App-level so it does not register one global listener
   per mounted terminal tab.

@@ -55,6 +55,7 @@ function TerminalViewComponent({
   const refreshTimeoutRef = useRef<number | null>(null);
   const outputSettledTimeoutRef = useRef<number | null>(null);
   const lastFitSizeRef = useRef("");
+  const suppressNextPasteEventRef = useRef(false);
 
   useEffect(() => {
     activeRef.current = active;
@@ -172,7 +173,13 @@ function TerminalViewComponent({
       setContextMenu(null);
       queueRefresh();
     };
-    const pasteFromSystemClipboard = async () => {
+    const pasteText = (text: string) => {
+      if (text.length === 0) return;
+      terminal.focus();
+      // Keep bracketed paste semantics so multiline text is inserted as one paste in TUIs.
+      terminal.paste(text);
+    };
+    const pasteFromSystemClipboard = async (fallbackText = "") => {
       if (statusRef.current !== "running" && statusRef.current !== "starting") {
         return;
       }
@@ -186,12 +193,9 @@ function TerminalViewComponent({
         return;
       }
 
-      const text = await navigator.clipboard?.readText().catch(() => "");
-      if (text && text.length > 0) {
-        terminal.focus();
-        // Keep xterm paste semantics so bracketed paste protects multiline text in TUIs.
-        terminal.paste(text);
-      }
+      const text =
+        fallbackText || (await navigator.clipboard?.readText().catch(() => ""));
+      pasteText(text);
     };
     const copyCurrentSelection = async () => {
       const selection = terminal.getSelection();
@@ -231,17 +235,49 @@ function TerminalViewComponent({
       if (statusRef.current !== "running" && statusRef.current !== "starting") {
         return;
       }
+      if (suppressNextPasteEventRef.current) {
+        suppressNextPasteEventRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       const types = Array.from(event.clipboardData?.types ?? []);
-      const hasTextData = types.some((type) =>
-        ["text/plain", "text/html", "text/uri-list"].includes(type),
-      );
-      if (hasTextData) return;
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (
+        text.length === 0 &&
+        types.some((type) => ["text/html", "text/uri-list"].includes(type))
+      ) {
+        return;
+      }
 
       event.preventDefault();
+      event.stopPropagation();
       void saveSystemClipboardFiles()
-        .then(insertPaths)
-        .catch((error) => onInputError(`粘贴文件失败: ${String(error)}`));
+        .catch((error) => {
+          onInputError(`粘贴文件失败: ${String(error)}`);
+          return [];
+        })
+        .then((paths) => {
+          if (paths.length > 0) {
+            insertPaths(paths);
+            return;
+          }
+          pasteText(text);
+        });
+    };
+    const handleTerminalKeyDown = (event: KeyboardEvent) => {
+      if (!activeRef.current) return;
+      if (event.key.toLowerCase() !== "v" || event.altKey) return;
+      if (!event.ctrlKey && !event.metaKey) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextPasteEventRef.current = true;
+      void pasteFromSystemClipboard();
+      window.setTimeout(() => {
+        suppressNextPasteEventRef.current = false;
+      }, 0);
     };
     const handleDocumentPointerDown = (event: PointerEvent) => {
       const target = event.target;
@@ -265,6 +301,7 @@ function TerminalViewComponent({
     container.addEventListener("wheel", handleWheel, { passive: true });
     container.addEventListener("contextmenu", handleContextMenu);
     container.addEventListener("pointerup", handlePointerUp);
+    container.addEventListener("keydown", handleTerminalKeyDown, true);
     container.addEventListener("paste", handlePaste, true);
     document.addEventListener("pointerdown", handleDocumentPointerDown);
     window.addEventListener("keydown", handleKeyDown);
@@ -383,6 +420,7 @@ function TerminalViewComponent({
       container.removeEventListener("wheel", handleWheel);
       container.removeEventListener("contextmenu", handleContextMenu);
       container.removeEventListener("pointerup", handlePointerUp);
+      container.removeEventListener("keydown", handleTerminalKeyDown, true);
       container.removeEventListener("paste", handlePaste, true);
       document.removeEventListener("pointerdown", handleDocumentPointerDown);
       window.removeEventListener("keydown", handleKeyDown);

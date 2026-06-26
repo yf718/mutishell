@@ -42,6 +42,7 @@ export type AppStateFile = {
 
 export type TerminalCreateRequest = {
   terminalId?: string;
+  terminalInstanceId?: string;
   shellProfileId: string;
   shellProfile?: ShellProfile;
   cwd: string;
@@ -52,16 +53,19 @@ export type TerminalCreateRequest = {
 
 export type TerminalCreated = {
   id: string;
+  instanceId: string;
   pid?: number;
 };
 
 export type TerminalDataEvent = {
   terminalId: string;
+  instanceId: string;
   data: string;
 };
 
 export type TerminalExitEvent = {
   terminalId: string;
+  instanceId: string;
 };
 
 export type TerminalStatus = "idle" | "starting" | "running" | "exited" | "error";

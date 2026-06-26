@@ -18,6 +18,8 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 - Create up to 5 terminal tabs per project with detected shell profiles.
 - Restore saved projects and terminal tabs after app restart.
 - Restart or close terminal tabs.
+- Close every terminal tab from the topbar. This clears saved tab definitions
+  and closes all backend PTY processes.
 - Drag the sidebar divider to persist a custom sidebar width.
 - Scroll and sort the project list by dragging the row handle. Sorting is
   disabled while search is active.
@@ -124,11 +126,25 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Restored tabs must be started idempotently after both xterm and saved tabs are
   ready. Do not rely only on `TerminalView.onReady`; it can fire before React
   refs have the hydrated tab list.
+- `startTerminal` must check that the tab still exists before and after
+  `terminal_create`. Close-all may use a global launch generation, but
+  close-tab and remove-project must cancel only the affected tab ids. If a
+  close action wins the race while a terminal is starting, immediately call
+  `terminal_close_instance` for that tab id and instance id so no invisible PTY
+  is left running.
+- Keep same-tab terminal launches serialized with `terminalLaunchTasks`.
+  Restart can reuse a tab id, so output and exit events must also carry and
+  match `instanceId`; otherwise an old PTY reader can remove or mark exited a
+  newer process with the same tab id.
 - Strip the Windows `\\?\` prefix before passing cwd to shells. CMD rejects it
   and falls back to `C:\Windows`.
 - Closing a tab should call `terminal_close`.
-- Restart should remove the tab id from `startedTerminals`.
-- PTY output must be routed by `terminalId`; never broadcast output to all tabs.
+- Closing all tabs should call `terminal_close_all`, clear `startedTerminals`,
+  clear saved tabs, and reset active-tab selections.
+- Restart should remove the tab id from `startedTerminals` and wait for any
+  current launch task before starting the replacement.
+- PTY output must be routed by `terminalId` and current `instanceId`; never
+  broadcast output to all tabs.
 - Frontend terminal output is flushed with `queueMicrotask`, not
   `requestAnimationFrame`. Some TUIs emit cursor moves in adjacent PTY chunks;
   delaying writes until the next frame can expose intermediate cursor positions.
@@ -146,6 +162,11 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Terminal file insertion intentionally limits each operation to 10 paths.
 - Paste handling lives in `TerminalView` capture phase so it can intercept
   image-only clipboard content before xterm's helper textarea consumes it.
+- Keyboard paste and right-click paste should both call
+  `saveSystemClipboardFiles()` before falling back to `terminal.paste(text)`.
+  This keeps copied Explorer files and screenshots preferred over any text
+  representation while preserving xterm bracketed paste for multiline text in
+  TUIs such as Codex.
 - The terminal right-click menu lives in `TerminalView` and should remain small:
   only copy and paste. Paste must call `saveSystemClipboardFiles()` first so
   Explorer file copies and screenshots keep working, then fall back to
@@ -210,4 +231,6 @@ Before handing off changes:
 - Copy a file from Explorer and paste into the terminal
 - Copy a screenshot and confirm a temp file path is inserted
 - Switch away and back
+- Click the topbar close-all-terminal button and confirm all project tab counts
+  return to zero
 - Close and restart the app to confirm saved tabs restore

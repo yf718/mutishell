@@ -119,6 +119,7 @@ pub struct AppStateFile {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalCreateRequest {
     pub terminal_id: Option<String>,
+    pub terminal_instance_id: Option<String>,
     pub shell_profile_id: String,
     pub shell_profile: Option<ShellProfile>,
     pub cwd: String,
@@ -131,6 +132,7 @@ pub struct TerminalCreateRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalCreated {
     pub id: String,
+    pub instance_id: String,
     pub pid: Option<u32>,
 }
 
@@ -138,6 +140,7 @@ pub struct TerminalCreated {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalDataEvent {
     pub terminal_id: String,
+    pub instance_id: String,
     pub data: String,
 }
 
@@ -145,9 +148,11 @@ pub struct TerminalDataEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalExitEvent {
     pub terminal_id: String,
+    pub instance_id: String,
 }
 
 struct TerminalProcess {
+    instance_id: String,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     master: Box<dyn MasterPty + Send>,
@@ -161,8 +166,13 @@ struct TerminalRegistry {
 
 impl TerminalRegistry {
     fn insert(&self, id: String, terminal: TerminalProcess) -> AppResult<()> {
-        let mut terminals = self.terminals.lock().map_err(lock_error)?;
-        terminals.insert(id, terminal);
+        let replaced = {
+            let mut terminals = self.terminals.lock().map_err(lock_error)?;
+            terminals.insert(id, terminal)
+        };
+        if let Some(terminal) = replaced {
+            shutdown_terminal(terminal);
+        }
         Ok(())
     }
 
@@ -203,33 +213,57 @@ impl TerminalRegistry {
             let mut terminals = self.terminals.lock().map_err(lock_error)?;
             terminals.remove(id)
         };
-        if let Some(mut terminal) = terminal {
-            terminal.alive.store(false, Ordering::SeqCst);
-            let _ = terminal.child.kill();
-            let _ = terminal.child.wait();
+        if let Some(terminal) = terminal {
+            shutdown_terminal(terminal);
         }
         Ok(())
     }
 
-    fn remove(&self, id: &str) -> AppResult<()> {
-        let mut terminals = self.terminals.lock().map_err(lock_error)?;
-        terminals.remove(id);
-        Ok(())
-    }
-
-    fn close_all(&self) {
-        let terminals: Result<Vec<TerminalProcess>, _> = self
-            .terminals
-            .lock()
-            .map(|mut terminals| terminals.drain().map(|(_, terminal)| terminal).collect());
-        if let Ok(terminals) = terminals {
-            for mut terminal in terminals {
-                terminal.alive.store(false, Ordering::SeqCst);
-                let _ = terminal.child.kill();
-                let _ = terminal.child.wait();
+    fn close_instance(&self, id: &str, instance_id: &str) -> AppResult<()> {
+        let terminal = {
+            let mut terminals = self.terminals.lock().map_err(lock_error)?;
+            if terminals
+                .get(id)
+                .is_some_and(|terminal| terminal.instance_id == instance_id)
+            {
+                terminals.remove(id)
+            } else {
+                None
             }
+        };
+        if let Some(terminal) = terminal {
+            shutdown_terminal(terminal);
         }
+        Ok(())
     }
+
+    fn remove_instance(&self, id: &str, instance_id: &str) -> AppResult<()> {
+        let mut terminals = self.terminals.lock().map_err(lock_error)?;
+        if terminals
+            .get(id)
+            .is_some_and(|terminal| terminal.instance_id == instance_id)
+        {
+            terminals.remove(id);
+        }
+        Ok(())
+    }
+
+    fn close_all(&self) -> AppResult<()> {
+        let terminals: Vec<TerminalProcess> = {
+            let mut terminals = self.terminals.lock().map_err(lock_error)?;
+            terminals.drain().map(|(_, terminal)| terminal).collect()
+        };
+        for terminal in terminals {
+            shutdown_terminal(terminal);
+        }
+        Ok(())
+    }
+}
+
+fn shutdown_terminal(mut terminal: TerminalProcess) {
+    terminal.alive.store(false, Ordering::SeqCst);
+    let _ = terminal.child.kill();
+    let _ = terminal.child.wait();
 }
 
 #[tauri::command]
@@ -373,6 +407,10 @@ fn terminal_create(
         .terminal_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let terminal_instance_id = request
+        .terminal_instance_id
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let default_profile = default_shell_profiles()
         .into_iter()
         .find(|item| item.id == request.shell_profile_id)
@@ -429,7 +467,9 @@ fn terminal_create(
     let alive_for_reader = alive.clone();
     let app_for_reader = app.clone();
     let terminal_id_for_reader = terminal_id.clone();
+    let terminal_instance_id_for_reader = terminal_instance_id.clone();
     let terminal_id_for_cleanup = terminal_id.clone();
+    let terminal_instance_id_for_cleanup = terminal_instance_id.clone();
 
     thread::Builder::new()
         .name(format!("terminal-reader-{terminal_id}"))
@@ -444,6 +484,7 @@ fn terminal_create(
                             "terminal://data",
                             TerminalDataEvent {
                                 terminal_id: terminal_id_for_reader.clone(),
+                                instance_id: terminal_instance_id_for_reader.clone(),
                                 data,
                             },
                         );
@@ -456,16 +497,19 @@ fn terminal_create(
                 "terminal://exit",
                 TerminalExitEvent {
                     terminal_id: terminal_id_for_reader,
+                    instance_id: terminal_instance_id_for_reader,
                 },
             );
             let registry = app_for_reader.state::<TerminalRegistry>();
-            let _ = registry.remove(&terminal_id_for_cleanup);
+            let _ = registry
+                .remove_instance(&terminal_id_for_cleanup, &terminal_instance_id_for_cleanup);
         })
         .map_err(|err| format!("Failed to start terminal reader: {err}"))?;
 
     registry.insert(
         terminal_id.clone(),
         TerminalProcess {
+            instance_id: terminal_instance_id.clone(),
             writer,
             child,
             master: pty_pair.master,
@@ -475,6 +519,7 @@ fn terminal_create(
 
     Ok(TerminalCreated {
         id: terminal_id,
+        instance_id: terminal_instance_id,
         pid,
     })
 }
@@ -506,6 +551,20 @@ fn terminal_close(
     registry.close(&terminal_id)
 }
 
+#[tauri::command]
+fn terminal_close_instance(
+    registry: tauri::State<'_, TerminalRegistry>,
+    terminal_id: String,
+    instance_id: String,
+) -> AppResult<()> {
+    registry.close_instance(&terminal_id, &instance_id)
+}
+
+#[tauri::command]
+fn terminal_close_all(registry: tauri::State<'_, TerminalRegistry>) -> AppResult<()> {
+    registry.close_all()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -532,12 +591,14 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_close,
+            terminal_close_instance,
+            terminal_close_all,
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
             app.listen("tauri://close-requested", move |_| {
                 let registry = app_handle.state::<TerminalRegistry>();
-                registry.close_all();
+                let _ = registry.close_all();
             });
             Ok(())
         })
