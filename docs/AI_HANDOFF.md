@@ -154,6 +154,9 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
   `.terminal-view.is-outputting` CSS unless a better xterm-level fix is proven.
   The debounce is intentionally short (`64ms`) so normal shell prompts still show
   their cursor after output settles.
+- `Shift+Enter` is mapped in `TerminalView` to xterm's `Alt+Enter` byte
+  sequence (`ESC` + `CR`) so raw-mode TUIs such as Claude Code and Codex CLI
+  treat it as an inserted newline instead of a submit Enter key.
 - Keep hidden terminal views mounted so scrollback survives tab switching.
 - Do not hide inactive xterm mounts with `display: none`; it can make fit
   measure a tiny width and shrink the PTY after switching projects.

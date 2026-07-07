@@ -18,6 +18,8 @@ type TerminalViewProps = {
   onResize: (terminalId: string, cols: number, rows: number) => void;
 };
 
+const ALT_ENTER_SEQUENCE = "\x1b\r";
+
 function TerminalViewComponent({
   tab,
   active,
@@ -152,10 +154,11 @@ function TerminalViewComponent({
         }, 80);
       });
     };
-    const inputDisposable = terminal.onData((data) => {
+    const writeTerminalInput = (data: string) => {
       if (statusRef.current !== "running" && statusRef.current !== "starting") return;
       void writeTerminal(tab.id, data).catch((error) => onWriteError(tab.id, error));
-    });
+    };
+    const inputDisposable = terminal.onData(writeTerminalInput);
     const hideCursorDuringOutput = () => {
       viewRef.current?.classList.add("is-outputting");
       if (outputSettledTimeoutRef.current !== null) {
@@ -231,6 +234,22 @@ function TerminalViewComponent({
     };
     const handleTerminalKeyDown = (event: KeyboardEvent) => {
       if (!activeRef.current) return;
+
+      if (
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        !composingRef.current
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        writeTerminalInput(ALT_ENTER_SEQUENCE);
+        return;
+      }
+
       if (event.key.toLowerCase() !== "v" || event.altKey) return;
       if (!event.ctrlKey && !event.metaKey) return;
 
