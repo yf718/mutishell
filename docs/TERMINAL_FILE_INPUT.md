@@ -29,21 +29,20 @@ paste handling.
 - `TerminalView.tsx` also owns a small terminal context menu with only `复制`
   and `粘贴`. The paste action first calls `saveSystemClipboardFiles()` so
   copied files and screenshots become shell-quoted paths. If no paths are
-  available, it reads regular text and passes it to `terminal.paste(text)` so
-  xterm keeps bracketed paste behavior for multiline content.
+  available, it reads regular text and routes it through
+  `src/utils/pasteManager.ts`.
+- `pasteManager.ts` writes text directly to the PTY. For bracketed paste, it
+  normalizes pasted line breaks to LF and trims trailing line breaks before
+  adding explicit bracketed paste markers. This avoids turning pasted CRLF
+  lines into submit-style Enter input in raw-mode TUIs such as Codex.
 - `src/utils/terminalPaths.ts` owns shell-aware path formatting used by both
   drag/drop and paste.
 - A single drag/drop or copied-file paste inserts at most 10 paths. Extra paths
   are ignored.
-- If the paste event includes `text/plain`, the frontend prevents the browser
-  default, checks `saveSystemClipboardFiles()` first, and only calls
-  `terminal.paste(text)` when no file or screenshot paths are available. This
-  matches right-click paste behavior and preserves one bracketed paste sequence
-  for multiline text.
-- If the paste event only includes `text/html` or `text/uri-list`, it is left
-  to xterm's normal paste behavior.
-- Otherwise the frontend calls `saveSystemClipboardFiles()` and inserts any
-  returned paths.
+- The frontend prevents browser/xterm paste handling for terminal paste events,
+  checks `saveSystemClipboardFiles()` first, and only falls back to text when no
+  file or screenshot paths are available. Keyboard paste and right-click paste
+  share this path.
 
 Path insertion is shell-aware:
 

@@ -163,15 +163,15 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Paste handling lives in `TerminalView` capture phase so it can intercept
   image-only clipboard content before xterm's helper textarea consumes it.
 - Keyboard paste and right-click paste should both call
-  `saveSystemClipboardFiles()` before falling back to `terminal.paste(text)`.
-  This keeps copied Explorer files and screenshots preferred over any text
-  representation while preserving xterm bracketed paste for multiline text in
-  TUIs such as Codex.
+  `src/utils/pasteManager.ts`. The paste manager calls
+  `saveSystemClipboardFiles()` first, then writes text directly to the PTY with
+  LF-normalized bracketed paste markers for multiline text. Do not fall back to
+  xterm's own `terminal.paste(text)` path here; its CR newline normalization can
+  split multiline input into submitted commands in TUIs such as Codex.
 - The terminal right-click menu lives in `TerminalView` and should remain small:
   only copy and paste. Paste must call `saveSystemClipboardFiles()` first so
-  Explorer file copies and screenshots keep working, then fall back to
-  `terminal.paste(text)`. Do not write clipboard text directly to the PTY; a
-  trailing newline can auto-submit in TUIs such as opencode.
+  Explorer file copies and screenshots keep working, then route text through
+  the paste manager.
 - Screenshot paste should prefer registered compressed image formats and fall
   back to Windows `CF_DIB` / `CF_DIBV5` bitmap data. Clipboard image payloads
   larger than 20 MB are rejected before copying them into process memory.

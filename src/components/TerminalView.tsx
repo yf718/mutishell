@@ -3,9 +3,9 @@ import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { saveSystemClipboardFiles, writeTerminal } from "../services/tauriApi";
+import { writeTerminal } from "../services/tauriApi";
 import type { RuntimeTab } from "../types";
-import { formatTerminalPaths } from "../utils/terminalPaths";
+import { pasteManager } from "../utils/pasteManager";
 
 type TerminalViewProps = {
   tab: RuntimeTab;
@@ -173,29 +173,19 @@ function TerminalViewComponent({
       setContextMenu(null);
       queueRefresh();
     };
-    const pasteText = (text: string) => {
-      if (text.length === 0) return;
-      terminal.focus();
-      // Keep bracketed paste semantics so multiline text is inserted as one paste in TUIs.
-      terminal.paste(text);
-    };
     const pasteFromSystemClipboard = async (fallbackText = "") => {
       if (statusRef.current !== "running" && statusRef.current !== "starting") {
         return;
       }
 
-      const paths = await saveSystemClipboardFiles().catch((error) => {
-        onInputError(`粘贴文件失败: ${String(error)}`);
-        return [];
+      await pasteManager({
+        fallbackText,
+        onInputError,
+        onWriteError,
+        shellProfileId: tab.shellProfileId,
+        terminal,
+        terminalId: tab.id,
       });
-      if (paths.length > 0) {
-        insertPaths(paths);
-        return;
-      }
-
-      const text =
-        fallbackText || (await navigator.clipboard?.readText().catch(() => ""));
-      pasteText(text);
     };
     const copyCurrentSelection = async () => {
       const selection = terminal.getSelection();
@@ -222,14 +212,6 @@ function TerminalViewComponent({
     const handlePointerUp = () => {
       window.setTimeout(copySelection, 0);
     };
-    const insertPaths = (paths: string[]) => {
-      const { text } = formatTerminalPaths(paths, tab.shellProfileId);
-      if (!text) return;
-      terminal.focus();
-      void writeTerminal(tab.id, text).catch((error) =>
-        onWriteError(tab.id, error),
-      );
-    };
     const handlePaste = (event: ClipboardEvent) => {
       if (!activeRef.current) return;
       if (statusRef.current !== "running" && statusRef.current !== "starting") {
@@ -242,29 +224,10 @@ function TerminalViewComponent({
         return;
       }
 
-      const types = Array.from(event.clipboardData?.types ?? []);
       const text = event.clipboardData?.getData("text/plain") ?? "";
-      if (
-        text.length === 0 &&
-        types.some((type) => ["text/html", "text/uri-list"].includes(type))
-      ) {
-        return;
-      }
-
       event.preventDefault();
       event.stopPropagation();
-      void saveSystemClipboardFiles()
-        .catch((error) => {
-          onInputError(`粘贴文件失败: ${String(error)}`);
-          return [];
-        })
-        .then((paths) => {
-          if (paths.length > 0) {
-            insertPaths(paths);
-            return;
-          }
-          pasteText(text);
-        });
+      void pasteFromSystemClipboard(text);
     };
     const handleTerminalKeyDown = (event: KeyboardEvent) => {
       if (!activeRef.current) return;
@@ -277,7 +240,7 @@ function TerminalViewComponent({
       void pasteFromSystemClipboard();
       window.setTimeout(() => {
         suppressNextPasteEventRef.current = false;
-      }, 0);
+      }, 120);
     };
     const handleDocumentPointerDown = (event: PointerEvent) => {
       const target = event.target;

@@ -243,9 +243,10 @@ This is important because users may install Git Bash outside
 - Keep drag/drop handling App-level so it does not register one global listener
   per mounted terminal tab.
 - Keep terminal right-click paste wired through `save_system_clipboard_files`
-  first, then fall back to `terminal.paste(text)`. This preserves copied-file
-  and screenshot paste behavior while letting xterm handle bracketed paste for
-  text.
+  first, then route text through `src/utils/pasteManager.ts`. Do not fall back
+  to xterm's own paste path; the paste manager writes LF-normalized bracketed
+  paste markers for multiline text so TUIs such as Codex do not treat pasted
+  CRLF newlines as submit keys.
 - Keep Windows IME anchored to the fixed bottom dock in `TerminalView`. Do not
   resize/refit xterm during composition because that makes terminal rows jump
   while typing.
