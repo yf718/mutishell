@@ -38,6 +38,7 @@ export type AppStateFile = {
   theme?: AppTheme;
   rightClickPaste?: boolean;
   copyOnSelect?: boolean;
+  terminalFontSize?: number;
 };
 
 export type TerminalCreateRequest = {

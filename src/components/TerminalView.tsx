@@ -1,16 +1,19 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
+import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { writeTerminal } from "../services/tauriApi";
-import type { RuntimeTab } from "../types";
+import type { AppTheme, RuntimeTab } from "../types";
 import { pasteManager } from "../utils/pasteManager";
 
 type TerminalViewProps = {
   tab: RuntimeTab;
   active: boolean;
   copyOnSelect: boolean;
+  terminalFontSize: number;
+  theme: AppTheme;
   onInputError: (message: string) => void;
   onWriteError: (terminalId: string, error: unknown) => void;
   onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
@@ -20,10 +23,110 @@ type TerminalViewProps = {
 
 const ALT_ENTER_SEQUENCE = "\x1b\r";
 
+function toHexColor(red: number, green: number, blue: number) {
+  return `#${[red, green, blue]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function makeLightExtendedAnsiPalette() {
+  const colors: string[] = [];
+  const cube = [0, 95, 135, 175, 215, 255];
+
+  for (let redIndex = 0; redIndex < 6; redIndex += 1) {
+    for (let greenIndex = 0; greenIndex < 6; greenIndex += 1) {
+      for (let blueIndex = 0; blueIndex < 6; blueIndex += 1) {
+        const red = cube[redIndex];
+        const green = cube[greenIndex];
+        const blue = cube[blueIndex];
+        const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        colors.push(
+          luminance < 48
+            ? "#edf4f7"
+            : luminance < 72
+              ? "#e5eef3"
+              : toHexColor(red, green, blue),
+        );
+      }
+    }
+  }
+
+  for (let index = 0; index < 24; index += 1) {
+    const value = 8 + index * 10;
+    colors.push(value < 88 ? "#edf4f7" : toHexColor(value, value, value));
+  }
+
+  return colors;
+}
+
+const LIGHT_EXTENDED_ANSI = makeLightExtendedAnsiPalette();
+
+const TERMINAL_THEMES: Record<AppTheme, ITheme> = {
+  dark: {
+    background: "#111318",
+    foreground: "#d8dee9",
+    cursor: "#a6e3a1",
+    cursorAccent: "#111318",
+    selectionBackground: "#3b4252",
+    selectionForeground: "#f4f7fb",
+    selectionInactiveBackground: "#2f3946",
+    scrollbarSliderBackground: "#3a4652",
+    scrollbarSliderHoverBackground: "#4b5967",
+    scrollbarSliderActiveBackground: "#5d6c7b",
+    black: "#2e3440",
+    red: "#bf616a",
+    green: "#a3be8c",
+    yellow: "#ebcb8b",
+    blue: "#81a1c1",
+    magenta: "#b48ead",
+    cyan: "#88c0d0",
+    white: "#e5e9f0",
+    brightBlack: "#4c566a",
+    brightRed: "#bf616a",
+    brightGreen: "#a3be8c",
+    brightYellow: "#ebcb8b",
+    brightBlue: "#81a1c1",
+    brightMagenta: "#b48ead",
+    brightCyan: "#8fbcbb",
+    brightWhite: "#eceff4",
+  },
+  light: {
+    background: "#fbfdff",
+    foreground: "#24313b",
+    cursor: "#1d6f87",
+    cursorAccent: "#fbfdff",
+    selectionBackground: "#cfe8ef",
+    selectionForeground: "#15232c",
+    selectionInactiveBackground: "#dce9ee",
+    scrollbarSliderBackground: "#b7c7d2",
+    scrollbarSliderHoverBackground: "#9badb9",
+    scrollbarSliderActiveBackground: "#8298a6",
+    black: "#edf4f7",
+    red: "#b42318",
+    green: "#1f7a4d",
+    yellow: "#8a5a00",
+    blue: "#1d5f99",
+    magenta: "#8b4a8f",
+    cyan: "#187180",
+    white: "#f8fbfc",
+    brightBlack: "#c7d6de",
+    brightRed: "#d14536",
+    brightGreen: "#239b56",
+    brightYellow: "#b7791f",
+    brightBlue: "#2f80c4",
+    brightMagenta: "#a765ad",
+    brightCyan: "#2495a5",
+    brightWhite: "#ffffff",
+    extendedAnsi: LIGHT_EXTENDED_ANSI,
+  },
+};
+
 function TerminalViewComponent({
   tab,
   active,
   copyOnSelect,
+  terminalFontSize,
+  theme,
   onInputError,
   onWriteError,
   onReady,
@@ -83,8 +186,9 @@ function TerminalViewComponent({
       convertEol: false,
       fontFamily:
         "Cascadia Mono, CaskaydiaCove Nerd Font, Consolas, 'Courier New', monospace",
-      fontSize: 13,
+      fontSize: terminalFontSize,
       lineHeight: 1.16,
+      minimumContrastRatio: 4.5,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
       scrollback: 8000,
@@ -92,28 +196,7 @@ function TerminalViewComponent({
       windowsPty: {
         backend: "conpty",
       },
-      theme: {
-        background: "#111318",
-        foreground: "#d8dee9",
-        cursor: "#a6e3a1",
-        selectionBackground: "#3b4252",
-        black: "#2e3440",
-        red: "#bf616a",
-        green: "#a3be8c",
-        yellow: "#ebcb8b",
-        blue: "#81a1c1",
-        magenta: "#b48ead",
-        cyan: "#88c0d0",
-        white: "#e5e9f0",
-        brightBlack: "#4c566a",
-        brightRed: "#bf616a",
-        brightGreen: "#a3be8c",
-        brightYellow: "#ebcb8b",
-        brightBlue: "#81a1c1",
-        brightMagenta: "#b48ead",
-        brightCyan: "#8fbcbb",
-        brightWhite: "#eceff4",
-      },
+      theme: TERMINAL_THEMES[theme],
     });
     const fitAddon = new FitAddon();
 
@@ -440,7 +523,43 @@ function TerminalViewComponent({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [onDispose, onInputError, onReady, onResize, onWriteError, tab.id, tab.shellProfileId]);
+  }, [
+    onDispose,
+    onInputError,
+    onReady,
+    onResize,
+    onWriteError,
+    tab.id,
+    tab.shellProfileId,
+  ]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    const container = containerRef.current;
+    if (!terminal || !fitAddon || !container) return;
+
+    terminal.options.fontSize = terminalFontSize;
+    try {
+      if (container.clientWidth >= 40 && container.clientHeight >= 40) {
+        fitAddon.fit();
+        onResize(tab.id, terminal.cols, terminal.rows);
+      }
+      terminal.clearTextureAtlas();
+      terminal.refresh(0, terminal.rows - 1);
+    } catch {
+      // The terminal may be hidden while settings are being changed.
+    }
+  }, [onResize, tab.id, terminalFontSize]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    terminal.options.theme = { ...TERMINAL_THEMES[theme] };
+    terminal.clearTextureAtlas();
+    terminal.refresh(0, terminal.rows - 1);
+  }, [theme]);
 
   useEffect(() => {
     if (!active || !fitAddonRef.current || !terminalRef.current) {
@@ -547,6 +666,8 @@ export const TerminalView = memo(
     previous.tab.status === next.tab.status &&
     previous.tab.shellProfileId === next.tab.shellProfileId &&
     previous.copyOnSelect === next.copyOnSelect &&
+    previous.terminalFontSize === next.terminalFontSize &&
+    previous.theme === next.theme &&
     previous.onInputError === next.onInputError &&
     previous.onWriteError === next.onWriteError,
 );

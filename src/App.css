@@ -65,7 +65,21 @@ button {
   --text-strong: #16242d;
   --muted: #71808b;
   --muted-strong: #596976;
-  --terminal-bg: #111318;
+  --terminal-frame-bg: #eef5f7;
+  --terminal-bg: #fbfdff;
+  --terminal-scrollbar-thumb: #b7c7d2;
+  --terminal-ime-bg: #eef5f7;
+  --terminal-ime-border: #d8e4e8;
+  --terminal-ime-text: #24313b;
+  --terminal-ime-muted: #596976;
+  --terminal-ime-chip-bg: #dce9ee;
+  --terminal-ime-accent: #1d6f87;
+  --terminal-menu-bg: #ffffff;
+  --terminal-menu-border: #d8e4e8;
+  --terminal-menu-text: #24313b;
+  --terminal-menu-muted: #8a98a4;
+  --terminal-menu-hover: #e7f1f3;
+  --terminal-menu-shadow: rgba(15, 23, 42, 0.16);
   background: var(--app-bg);
   color: var(--text);
 }
@@ -85,7 +99,21 @@ button {
   --text-strong: #f4f7f9;
   --muted: #93a3ad;
   --muted-strong: #b1c0c9;
-  --terminal-bg: #0f1218;
+  --terminal-frame-bg: #0f1218;
+  --terminal-bg: #111318;
+  --terminal-scrollbar-thumb: #3a4652;
+  --terminal-ime-bg: #1f1f1f;
+  --terminal-ime-border: rgba(255, 255, 255, 0.12);
+  --terminal-ime-text: #f4f7fb;
+  --terminal-ime-muted: #9fb0bd;
+  --terminal-ime-chip-bg: rgba(255, 255, 255, 0.08);
+  --terminal-ime-accent: #a6e3a1;
+  --terminal-menu-bg: #20252d;
+  --terminal-menu-border: rgba(255, 255, 255, 0.12);
+  --terminal-menu-text: #edf2f7;
+  --terminal-menu-muted: #6f7b86;
+  --terminal-menu-hover: rgba(255, 255, 255, 0.1);
+  --terminal-menu-shadow: rgba(0, 0, 0, 0.36);
 }
 
 .sidebar {
@@ -643,7 +671,7 @@ button {
   position: relative;
   min-height: 0;
   flex: 1;
-  background: var(--terminal-bg);
+  background: var(--terminal-frame-bg);
 }
 
 .terminal-view {
@@ -665,7 +693,7 @@ button {
 .terminal-mount {
   width: 100%;
   height: 100%;
-  background: #111318;
+  background: var(--terminal-bg);
   overflow: hidden;
 }
 
@@ -674,9 +702,12 @@ button {
   isolation: isolate;
 }
 
-.terminal-mount .xterm-viewport,
-.terminal-mount .xterm-screen {
-  background: #111318;
+.app-shell .terminal-mount .xterm .xterm-viewport,
+.app-shell .terminal-mount .xterm .xterm-screen,
+.app-shell .terminal-mount .xterm .xterm-screen canvas,
+.app-shell .terminal-mount .xterm .xterm-rows {
+  background: var(--terminal-bg);
+  background-color: var(--terminal-bg);
 }
 
 .terminal-mount .xterm-viewport::-webkit-scrollbar {
@@ -686,13 +717,13 @@ button {
 
 .terminal-mount .xterm-viewport::-webkit-scrollbar-track,
 .terminal-mount .xterm-viewport::-webkit-scrollbar-corner {
-  background: #111318;
+  background: var(--terminal-bg);
 }
 
 .terminal-mount .xterm-viewport::-webkit-scrollbar-thumb {
-  border: 2px solid #111318;
+  border: 2px solid var(--terminal-bg);
   border-radius: 999px;
-  background: #3a4652;
+  background: var(--terminal-scrollbar-thumb);
   background-clip: content-box;
 }
 
@@ -724,7 +755,8 @@ button {
   max-width: min(420px, 70vw);
   overflow: hidden;
   border-radius: 3px;
-  background: rgba(17, 19, 24, 0.92);
+  background: var(--terminal-ime-bg);
+  color: var(--terminal-ime-text);
   z-index: 21;
 }
 
@@ -743,9 +775,9 @@ button {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  background: #1f1f1f;
-  color: #e8edf3;
+  border-top: 1px solid var(--terminal-ime-border);
+  background: var(--terminal-ime-bg);
+  color: var(--terminal-ime-text);
   opacity: 0;
   pointer-events: none;
 }
@@ -760,8 +792,8 @@ button {
   align-items: center;
   padding: 0 8px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #9fb0bd;
+  background: var(--terminal-ime-chip-bg);
+  color: var(--terminal-ime-muted);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0;
@@ -774,8 +806,8 @@ button {
   min-height: 32px;
   align-items: center;
   overflow: hidden;
-  border-bottom: 2px solid #a6e3a1;
-  color: #f4f7fb;
+  border-bottom: 2px solid var(--terminal-ime-accent);
+  color: var(--terminal-ime-text);
   font-family:
     Cascadia Mono, CaskaydiaCove Nerd Font, Consolas, "Courier New", monospace;
   font-size: 18px;
@@ -792,10 +824,10 @@ button {
   flex-direction: column;
   gap: 2px;
   padding: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--terminal-menu-border);
   border-radius: 6px;
-  background: #20252d;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+  background: var(--terminal-menu-bg);
+  box-shadow: 0 12px 32px var(--terminal-menu-shadow);
 }
 
 .terminal-context-menu button {
@@ -803,17 +835,17 @@ button {
   padding: 0 10px;
   border-radius: 4px;
   background: transparent;
-  color: #edf2f7;
+  color: var(--terminal-menu-text);
   cursor: pointer;
   text-align: left;
 }
 
 .terminal-context-menu button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--terminal-menu-hover);
 }
 
 .terminal-context-menu button:disabled {
-  color: #6f7b86;
+  color: var(--terminal-menu-muted);
   cursor: not-allowed;
 }
 
@@ -1044,20 +1076,31 @@ button {
   grid-template-columns: 18px minmax(0, 1fr) 32px;
 }
 
-.setting-toggle {
+.setting-toggle,
+.setting-range {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
   gap: 10px;
-  align-items: start;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--input-bg);
   color: var(--text);
+}
+
+.setting-toggle {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
   cursor: pointer;
 }
 
-.setting-toggle + .setting-toggle {
+.setting-range {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.setting-toggle + .setting-toggle,
+.setting-range + .setting-toggle,
+.setting-toggle + .setting-range,
+.setting-range + .setting-range {
   margin-top: 8px;
 }
 
@@ -1073,6 +1116,43 @@ button {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.setting-range > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setting-range em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.setting-range div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  gap: 10px;
+  align-items: center;
+}
+
+.setting-range input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.setting-range input[type="number"] {
+  width: 58px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--panel-bg);
+  color: var(--text);
+  text-align: center;
 }
 
 .settings-dialog footer {

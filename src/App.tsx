@@ -6,7 +6,6 @@ import {
   Circle,
   GripVertical,
   Images,
-  Pencil,
   Moon,
   Folder,
   FolderOpen,
@@ -53,6 +52,9 @@ const MAX_TERMINALS_PER_PROJECT = 5;
 const DEFAULT_SIDEBAR_WIDTH = 172;
 const MIN_SIDEBAR_WIDTH = 112;
 const MAX_SIDEBAR_WIDTH = 220;
+const DEFAULT_TERMINAL_FONT_SIZE = 13;
+const MIN_TERMINAL_FONT_SIZE = 11;
+const MAX_TERMINAL_FONT_SIZE = 22;
 const MAX_TERMINAL_WRITE_BYTES_PER_FRAME = 256 * 1024;
 const MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME = 1024 * 1024;
 
@@ -92,12 +94,23 @@ function defaultState(shellProfiles: ShellProfile[] = []): AppStateFile {
     theme: "dark",
     rightClickPaste: false,
     copyOnSelect: false,
+    terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   };
 }
 
 function clampSidebarWidth(width: number) {
   return Math.round(
     Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)),
+  );
+}
+
+function clampTerminalFontSize(size: number) {
+  if (!Number.isFinite(size)) return DEFAULT_TERMINAL_FONT_SIZE;
+  return Math.round(
+    Math.min(
+      MAX_TERMINAL_FONT_SIZE,
+      Math.max(MIN_TERMINAL_FONT_SIZE, size),
+    ),
   );
 }
 
@@ -182,6 +195,9 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [copyOnSelect, setCopyOnSelect] = useState(false);
+  const [terminalFontSize, setTerminalFontSize] = useState(
+    DEFAULT_TERMINAL_FONT_SIZE,
+  );
   const [clearingPasteTempFiles, setClearingPasteTempFiles] = useState(false);
 
   const terminalRefs = useRef(new Map<string, Terminal>());
@@ -262,6 +278,7 @@ export default function App() {
       theme,
       rightClickPaste: false,
       copyOnSelect,
+      terminalFontSize,
     };
   }, [
     activeProjectId,
@@ -272,6 +289,7 @@ export default function App() {
     sidebarWidth,
     shellProfiles,
     tabs,
+    terminalFontSize,
     theme,
   ]);
 
@@ -731,15 +749,6 @@ export default function App() {
     };
   }, [handleTerminalWriteError]);
 
-  const renameActiveTab = useCallback(() => {
-    if (!activeTab) return;
-    const title = window.prompt("重命名终端 Tab", activeTab.title)?.trim();
-    if (!title) return;
-    setTabs((current) =>
-      current.map((tab) => (tab.id === activeTab.id ? { ...tab, title } : tab)),
-    );
-  }, [activeTab]);
-
   const ensureTerminalStarted = useCallback(
     (terminalId: string) => {
       const tab = tabsRef.current.find((item) => item.id === terminalId);
@@ -928,6 +937,11 @@ export default function App() {
         );
         setTheme(state.theme ?? "dark");
         setCopyOnSelect(state.copyOnSelect ?? false);
+        setTerminalFontSize(
+          clampTerminalFontSize(
+            state.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
+          ),
+        );
         setHydrated(true);
       } catch (hydrateError) {
         const profiles = await getShellProfiles().catch(() => []);
@@ -1263,7 +1277,6 @@ export default function App() {
                           [tab.projectId]: tab.id,
                         }))
                       }
-                      onDoubleClick={renameActiveTab}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
@@ -1296,14 +1309,6 @@ export default function App() {
               </div>
               {activeTab && (
                 <div className="tab-actions" ref={tabActionsRef}>
-                  <button
-                    className="icon-button"
-                    onClick={renameActiveTab}
-                    title="重命名当前 Tab"
-                    type="button"
-                  >
-                    <Pencil size={15} />
-                  </button>
                   <button
                     className="icon-button"
                     onClick={() => void restartTab(activeTab)}
@@ -1361,6 +1366,8 @@ export default function App() {
                   onResize={resizeTerminalIfChanged}
                   onWriteError={handleTerminalWriteError}
                   tab={tab}
+                  terminalFontSize={terminalFontSize}
+                  theme={theme}
                 />
               ))}
               {tabsForProject.length === 0 && (
@@ -1442,10 +1449,14 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           onCopyOnSelectChange={setCopyOnSelect}
           onDefaultChange={setDefaultShellProfileId}
+          onTerminalFontSizeChange={(size) =>
+            setTerminalFontSize(clampTerminalFontSize(size))
+          }
           onProfilesChange={setShellProfiles}
           onRemoveProject={removeProject}
           projects={projects}
           shellProfiles={shellProfiles}
+          terminalFontSize={terminalFontSize}
         />
       )}
     </main>
@@ -1456,10 +1467,12 @@ type SettingsDialogProps = {
   shellProfiles: ShellProfile[];
   defaultShellProfileId: string;
   copyOnSelect: boolean;
+  terminalFontSize: number;
   projects: Project[];
   onClose: () => void;
   onCopyOnSelectChange: (enabled: boolean) => void;
   onDefaultChange: (id: string) => void;
+  onTerminalFontSizeChange: (size: number) => void;
   onProfilesChange: (profiles: ShellProfile[]) => void;
   onRemoveProject: (projectId: string) => void;
 };
@@ -1468,10 +1481,12 @@ function SettingsDialog({
   shellProfiles,
   defaultShellProfileId,
   copyOnSelect,
+  terminalFontSize,
   projects,
   onClose,
   onCopyOnSelectChange,
   onDefaultChange,
+  onTerminalFontSizeChange,
   onProfilesChange,
   onRemoveProject,
 }: SettingsDialogProps) {
@@ -1628,6 +1643,33 @@ function SettingsDialog({
 
           <section>
             <h2>终端行为</h2>
+            <label className="setting-range">
+              <span>
+                <strong>终端字号</strong>
+                <em>{terminalFontSize}px</em>
+              </span>
+              <div>
+                <input
+                  max={MAX_TERMINAL_FONT_SIZE}
+                  min={MIN_TERMINAL_FONT_SIZE}
+                  onChange={(event) =>
+                    onTerminalFontSizeChange(Number(event.target.value))
+                  }
+                  type="range"
+                  value={terminalFontSize}
+                />
+                <input
+                  aria-label="终端字号"
+                  max={MAX_TERMINAL_FONT_SIZE}
+                  min={MIN_TERMINAL_FONT_SIZE}
+                  onChange={(event) =>
+                    onTerminalFontSizeChange(Number(event.target.value))
+                  }
+                  type="number"
+                  value={terminalFontSize}
+                />
+              </div>
+            </label>
             <label className="setting-toggle">
               <input
                 checked={copyOnSelect}
