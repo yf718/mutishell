@@ -18,8 +18,6 @@ mutishell is not an IDE. Keep it focused on fast terminal workspace management:
 - Create up to 5 terminal tabs per project with detected shell profiles.
 - Restore saved projects and terminal tabs after app restart.
 - Restart or close terminal tabs.
-- Close every terminal tab from the topbar. This clears saved tab definitions
-  and closes all backend PTY processes.
 - Drag the sidebar divider to persist a custom sidebar width.
 - Scroll and sort the project list by dragging the row handle. Sorting is
   disabled while search is active.
@@ -127,9 +125,9 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
   ready. Do not rely only on `TerminalView.onReady`; it can fire before React
   refs have the hydrated tab list.
 - `startTerminal` must check that the tab still exists before and after
-  `terminal_create`. Close-all may use a global launch generation, but
-  close-tab and remove-project must cancel only the affected tab ids. If a
-  close action wins the race while a terminal is starting, immediately call
+  `terminal_create`. Close-tab and remove-project must cancel only the affected
+  tab ids. If a close action wins the race while a terminal is starting,
+  immediately call
   `terminal_close_instance` for that tab id and instance id so no invisible PTY
   is left running.
 - Keep same-tab terminal launches serialized with `terminalLaunchTasks`.
@@ -139,15 +137,13 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Strip the Windows `\\?\` prefix before passing cwd to shells. CMD rejects it
   and falls back to `C:\Windows`.
 - Closing a tab should call `terminal_close`.
-- Closing all tabs should call `terminal_close_all`, clear `startedTerminals`,
-  clear saved tabs, and reset active-tab selections.
 - Restart should remove the tab id from `startedTerminals` and wait for any
   current launch task before starting the replacement.
 - PTY output must be routed by `terminalId` and current `instanceId`; never
   broadcast output to all tabs.
-- Frontend terminal output is flushed with `queueMicrotask`, not
-  `requestAnimationFrame`. Some TUIs emit cursor moves in adjacent PTY chunks;
-  delaying writes until the next frame can expose intermediate cursor positions.
+- Frontend terminal output is usually flushed with `queueMicrotask` so adjacent
+  PTY chunks stay close together for TUIs. After a large byte budget, it yields
+  with `requestAnimationFrame` to avoid starving the UI.
 - Codex CLI currently redraws in the normal buffer and repeatedly shows the
   cursor at intermediate locations before moving it back to the prompt. Keep the
   `TerminalView` `onWriteParsed` cursor-hiding debounce and
@@ -234,6 +230,4 @@ Before handing off changes:
 - Copy a file from Explorer and paste into the terminal
 - Copy a screenshot and confirm a temp file path is inserted
 - Switch away and back
-- Click the topbar close-all-terminal button and confirm all project tab counts
-  return to zero
 - Close and restart the app to confirm saved tabs restore

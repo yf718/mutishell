@@ -141,7 +141,7 @@ pub struct TerminalCreated {
 pub struct TerminalDataEvent {
     pub terminal_id: String,
     pub instance_id: String,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -479,13 +479,12 @@ fn terminal_create(
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(size) => {
-                        let data = String::from_utf8_lossy(&buffer[..size]).to_string();
                         let _ = app_for_reader.emit(
                             "terminal://data",
                             TerminalDataEvent {
                                 terminal_id: terminal_id_for_reader.clone(),
                                 instance_id: terminal_instance_id_for_reader.clone(),
-                                data,
+                                data: buffer[..size].to_vec(),
                             },
                         );
                     }
@@ -560,11 +559,6 @@ fn terminal_close_instance(
     registry.close_instance(&terminal_id, &instance_id)
 }
 
-#[tauri::command]
-fn terminal_close_all(registry: tauri::State<'_, TerminalRegistry>) -> AppResult<()> {
-    registry.close_all()
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -592,7 +586,6 @@ pub fn run() {
             terminal_resize,
             terminal_close,
             terminal_close_instance,
-            terminal_close_all,
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();

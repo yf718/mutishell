@@ -71,10 +71,6 @@ export function closeTerminalInstance(
   return invoke("terminal_close_instance", { terminalId, instanceId });
 }
 
-export function closeAllTerminals(): Promise<void> {
-  return invoke("terminal_close_all");
-}
-
 export function onTerminalData(
   callback: (event: TerminalDataEvent) => void,
 ): Promise<UnlistenFn> {

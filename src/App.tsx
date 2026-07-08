@@ -11,7 +11,6 @@ import {
   Folder,
   FolderOpen,
   Maximize2,
-  PanelsTopLeft,
   Plus,
   RefreshCw,
   Search,
@@ -24,7 +23,6 @@ import {
 import "./App.css";
 import { TerminalView } from "./components/TerminalView";
 import {
-  closeAllTerminals,
   closeTerminal,
   closeTerminalInstance,
   checkExecutablePath,
@@ -55,11 +53,12 @@ const MAX_TERMINALS_PER_PROJECT = 5;
 const DEFAULT_SIDEBAR_WIDTH = 172;
 const MIN_SIDEBAR_WIDTH = 112;
 const MAX_SIDEBAR_WIDTH = 220;
-const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 256 * 1024;
+const MAX_TERMINAL_WRITE_BYTES_PER_FRAME = 256 * 1024;
+const MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME = 1024 * 1024;
 
 type TerminalOutputQueue = {
-  chunks: string[];
-  length: number;
+  chunks: Uint8Array[];
+  byteLength: number;
   index: number;
 };
 
@@ -120,32 +119,39 @@ function iconForProfile(profile?: ShellProfile) {
   return <SquareTerminal size={15} />;
 }
 
-function CloseAllTerminalsIcon() {
-  return (
-    <span className="close-all-terminals-icon" aria-hidden="true">
-      <PanelsTopLeft size={17} />
-      <X size={9} />
-    </span>
-  );
+function concatTerminalOutputBatch(
+  chunks: Uint8Array[],
+  byteLength: number,
+) {
+  if (chunks.length === 0) return new Uint8Array();
+  if (chunks.length === 1) return chunks[0];
+
+  const output = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
 }
 
 function takeTerminalOutputBatch(queue: TerminalOutputQueue) {
-  const batch: string[] = [];
-  let batchLength = 0;
+  const batch: Uint8Array[] = [];
+  let batchByteLength = 0;
 
   while (queue.index < queue.chunks.length) {
     const chunk = queue.chunks[queue.index];
     if (
       batch.length > 0 &&
-      batchLength + chunk.length > MAX_TERMINAL_WRITE_CHARS_PER_FRAME
+      batchByteLength + chunk.byteLength > MAX_TERMINAL_WRITE_BYTES_PER_FRAME
     ) {
       break;
     }
     queue.index += 1;
-    queue.length -= chunk.length;
+    queue.byteLength -= chunk.byteLength;
     batch.push(chunk);
-    batchLength += chunk.length;
-    if (batchLength >= MAX_TERMINAL_WRITE_CHARS_PER_FRAME) {
+    batchByteLength += chunk.byteLength;
+    if (batchByteLength >= MAX_TERMINAL_WRITE_BYTES_PER_FRAME) {
       break;
     }
   }
@@ -155,7 +161,7 @@ function takeTerminalOutputBatch(queue: TerminalOutputQueue) {
     queue.index = 0;
   }
 
-  return batch.length === 1 ? batch[0] : batch.join("");
+  return concatTerminalOutputBatch(batch, batchByteLength);
 }
 
 export default function App() {
@@ -176,7 +182,6 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [copyOnSelect, setCopyOnSelect] = useState(false);
-  const [closingAllTerminals, setClosingAllTerminals] = useState(false);
   const [clearingPasteTempFiles, setClearingPasteTempFiles] = useState(false);
 
   const terminalRefs = useRef(new Map<string, Terminal>());
@@ -184,6 +189,7 @@ export default function App() {
   const terminalOutputQueues = useRef(new Map<string, TerminalOutputQueue>());
   const terminalOutputFlushScheduled = useRef(false);
   const terminalOutputActive = useRef(true);
+  const terminalOutputBytesSinceFrame = useRef(0);
   const terminalSizeRefs = useRef(new Map<string, string>());
   const terminalInstanceIds = useRef(new Map<string, string>());
   const terminalLaunchTasks = useRef(new Map<string, Promise<void>>());
@@ -193,11 +199,7 @@ export default function App() {
   const tabsRef = useRef<RuntimeTab[]>([]);
   const activeTabIdRef = useRef<string | undefined>(undefined);
   const shellProfilesRef = useRef<ShellProfile[]>([]);
-  const closeAllGeneration = useRef(0);
-  const closeAllInProgress = useRef(false);
   const cancelledTerminalLaunches = useRef(new Set<string>());
-  const pendingAutoCreateTimers = useRef(new Set<number>());
-  const topbarActionsRef = useRef<HTMLDivElement | null>(null);
   const tabActionsRef = useRef<HTMLDivElement | null>(null);
   const draggedProjectId = useRef<string | null>(null);
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(
@@ -294,9 +296,7 @@ export default function App() {
   }, [hydrated, stateSnapshot]);
 
   const terminalLaunchStillValid = useCallback(
-    (tabId: string, generation: number) =>
-      closeAllGeneration.current === generation &&
-      !closeAllInProgress.current &&
+    (tabId: string) =>
       !cancelledTerminalLaunches.current.has(tabId) &&
       tabsRef.current.some((tab) => tab.id === tabId),
     [],
@@ -324,8 +324,7 @@ export default function App() {
         if (previousLaunch) {
           await previousLaunch.catch(() => undefined);
         }
-        const launchGeneration = closeAllGeneration.current;
-        if (!terminalLaunchStillValid(tab.id, launchGeneration)) return;
+        if (!terminalLaunchStillValid(tab.id)) return;
 
         const instanceId = makeId("terminal-instance");
         terminalInstanceIds.current.set(tab.id, instanceId);
@@ -339,7 +338,7 @@ export default function App() {
         );
 
         try {
-          if (!terminalLaunchStillValid(tab.id, launchGeneration)) {
+          if (!terminalLaunchStillValid(tab.id)) {
             if (terminalInstanceIds.current.get(tab.id) === instanceId) {
               terminalInstanceIds.current.delete(tab.id);
             }
@@ -365,7 +364,7 @@ export default function App() {
             rows,
           });
 
-          if (!terminalLaunchStillValid(tab.id, launchGeneration)) {
+          if (!terminalLaunchStillValid(tab.id)) {
             if (terminalInstanceIds.current.get(tab.id) === instanceId) {
               terminalInstanceIds.current.delete(tab.id);
             }
@@ -422,7 +421,6 @@ export default function App() {
 
   const createTab = useCallback(
     (project: Project, profile: ShellProfile) => {
-      if (closeAllInProgress.current) return;
       const projectTabs = tabs.filter((tab) => tab.projectId === project.id);
       if (projectTabs.length >= MAX_TERMINALS_PER_PROJECT) {
         setError(`每个项目最多打开 ${MAX_TERMINALS_PER_PROJECT} 个终端`);
@@ -481,11 +479,7 @@ export default function App() {
       detectedProfiles[0] ??
       shellProfiles[0];
     if (profile) {
-      const timerId = window.setTimeout(() => {
-        pendingAutoCreateTimers.current.delete(timerId);
-        createTab(project, profile);
-      }, 80);
-      pendingAutoCreateTimers.current.add(timerId);
+      window.setTimeout(() => createTab(project, profile), 80);
     }
   }, [
     createTab,
@@ -510,78 +504,6 @@ export default function App() {
       setClearingPasteTempFiles(false);
     }
   }, []);
-
-  const clearPendingAutoCreateTimers = useCallback(() => {
-    for (const timerId of pendingAutoCreateTimers.current) {
-      window.clearTimeout(timerId);
-    }
-    pendingAutoCreateTimers.current.clear();
-  }, []);
-
-  const closeAllTabs = useCallback(async () => {
-    const closingTabs = tabsRef.current;
-    const closingCount = closingTabs.length;
-    clearPendingAutoCreateTimers();
-    if (closingCount === 0) return;
-
-    setClosingAllTerminals(true);
-    setNewTerminalOpen(false);
-    closeAllInProgress.current = true;
-    closeAllGeneration.current += 1;
-    const closingTabIds = closingTabs.map((tab) => tab.id);
-    const closingTabIdSet = new Set(closingTabIds);
-    for (const tabId of closingTabIds) {
-      cancelledTerminalLaunches.current.add(tabId);
-    }
-    try {
-      await closeAllTerminals();
-      for (const tabId of closingTabIds) {
-        startedTerminals.current.delete(tabId);
-        terminalLaunchTasks.current.delete(tabId);
-        terminalInstanceIds.current.delete(tabId);
-        terminalOutputQueues.current.delete(tabId);
-        terminalSizeRefs.current.delete(tabId);
-      }
-      const nextTabs = tabsRef.current.filter(
-        (tab) => !closingTabIdSet.has(tab.id),
-      );
-      tabsRef.current = nextTabs;
-      setTabs(nextTabs);
-      setActiveTabByProject((current) => {
-        const next = { ...current };
-        for (const [projectId, tabId] of Object.entries(next)) {
-          if (closingTabIdSet.has(tabId)) {
-            const fallback = nextTabs.find((tab) => tab.projectId === projectId);
-            if (fallback) next[projectId] = fallback.id;
-            else delete next[projectId];
-          }
-        }
-        return next;
-      });
-      if (
-        activeTabIdRef.current &&
-        closingTabIdSet.has(activeTabIdRef.current)
-      ) {
-        activeTabIdRef.current = undefined;
-      }
-      setError(`已关闭 ${closingCount} 个终端`);
-    } catch (closeError) {
-      for (const tabId of closingTabIds) {
-        cancelledTerminalLaunches.current.delete(tabId);
-      }
-      setTabs((current) =>
-        current.map((tab) =>
-          tab.status === "starting" && !startedTerminals.current.has(tab.id)
-            ? { ...tab, status: "idle", error: "" }
-            : tab,
-        ),
-      );
-      setError(`关闭所有终端失败: ${String(closeError)}`);
-    } finally {
-      closeAllInProgress.current = false;
-      setClosingAllTerminals(false);
-    }
-  }, [clearPendingAutoCreateTimers]);
 
   const removeProject = useCallback(
     (projectId: string) => {
@@ -707,10 +629,8 @@ export default function App() {
 
   const restartTab = useCallback(
     async (tab: RuntimeTab) => {
-      if (closeAllInProgress.current) return;
       const currentLaunch = terminalLaunchTasks.current.get(tab.id);
       await currentLaunch?.catch(() => undefined);
-      if (closeAllInProgress.current) return;
       if (!tabsRef.current.some((item) => item.id === tab.id)) return;
       cancelledTerminalLaunches.current.delete(tab.id);
       startedTerminals.current.delete(tab.id);
@@ -866,37 +786,62 @@ export default function App() {
   const flushTerminalOutput = useCallback(() => {
     terminalOutputFlushScheduled.current = false;
     let hasMoreOutput = false;
+    let flushedByteLength = 0;
+    let reachedFlushBudget = false;
     for (const [terminalId, queue] of terminalOutputQueues.current) {
+      if (flushedByteLength >= MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME) {
+        hasMoreOutput = true;
+        reachedFlushBudget = true;
+        break;
+      }
+
       const data = takeTerminalOutputBatch(queue);
-      if (queue.length === 0) {
+      if (queue.byteLength === 0) {
         terminalOutputQueues.current.delete(terminalId);
       } else {
         hasMoreOutput = true;
       }
-      if (data.length === 0) continue;
+      if (data.byteLength === 0) continue;
       terminalRefs.current.get(terminalId)?.write(data);
+      flushedByteLength += data.byteLength;
     }
+
     if (
       hasMoreOutput &&
       terminalOutputActive.current &&
       !terminalOutputFlushScheduled.current
     ) {
+      const bytesSinceFrame =
+        terminalOutputBytesSinceFrame.current + flushedByteLength;
+      const shouldYieldFrame =
+        reachedFlushBudget ||
+        bytesSinceFrame >= MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME;
+
       terminalOutputFlushScheduled.current = true;
-      queueMicrotask(flushTerminalOutput);
+      if (shouldYieldFrame) {
+        terminalOutputBytesSinceFrame.current = 0;
+        window.requestAnimationFrame(flushTerminalOutput);
+      } else {
+        terminalOutputBytesSinceFrame.current = bytesSinceFrame;
+        queueMicrotask(flushTerminalOutput);
+      }
+    } else if (!hasMoreOutput) {
+      terminalOutputBytesSinceFrame.current = 0;
     }
   }, []);
 
   const enqueueTerminalOutput = useCallback(
-    (terminalId: string, data: string) => {
+    (terminalId: string, data: number[] | Uint8Array) => {
       if (data.length === 0) return;
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
       const queue = terminalOutputQueues.current.get(terminalId);
       if (queue) {
-        queue.chunks.push(data);
-        queue.length += data.length;
+        queue.chunks.push(bytes);
+        queue.byteLength += bytes.byteLength;
       } else {
         terminalOutputQueues.current.set(terminalId, {
-          chunks: [data],
-          length: data.length,
+          chunks: [bytes],
+          byteLength: bytes.byteLength,
           index: 0,
         });
       }
@@ -1066,7 +1011,6 @@ export default function App() {
     const closeTerminalMenu = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (topbarActionsRef.current?.contains(target)) return;
       if (tabActionsRef.current?.contains(target)) return;
       if (
         target instanceof Element &&
@@ -1248,23 +1192,7 @@ export default function App() {
             <strong>{activeProject?.name ?? "选择一个目录"}</strong>
             <span>{activeProject?.path ?? "添加项目后即可在该目录打开终端"}</span>
           </div>
-          <div className="topbar-actions" ref={topbarActionsRef}>
-            <button
-              aria-label="关闭所有终端"
-              className={[
-                "icon-button",
-                "danger",
-                closingAllTerminals ? "is-busy" : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              disabled={tabs.length === 0 || closingAllTerminals}
-              onClick={() => void closeAllTabs()}
-              title={tabs.length === 0 ? "没有可关闭的终端" : "关闭所有终端"}
-              type="button"
-            >
-              <CloseAllTerminalsIcon />
-            </button>
+          <div className="topbar-actions">
             <button
               className={["icon-button", clearingPasteTempFiles ? "is-busy" : ""]
                 .filter(Boolean)
@@ -1378,7 +1306,6 @@ export default function App() {
                   </button>
                   <button
                     className="icon-button"
-                    disabled={closingAllTerminals}
                     onClick={() => void restartTab(activeTab)}
                     title="重启当前终端"
                     type="button"
@@ -1388,17 +1315,12 @@ export default function App() {
                   <button
                     className="icon-button compact-add"
                     data-new-terminal-control
-                    disabled={
-                      closingAllTerminals ||
-                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
-                    }
+                    disabled={tabsForProject.length >= MAX_TERMINALS_PER_PROJECT}
                     onClick={() => setNewTerminalOpen((current) => !current)}
                     title={
-                      closingAllTerminals
-                        ? "正在关闭所有终端"
-                        : tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
-                          ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
-                          : "新增终端"
+                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                        ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
+                        : "新增终端"
                     }
                     type="button"
                   >
@@ -1409,7 +1331,6 @@ export default function App() {
                       {shellProfiles.map((profile) => (
                         <button
                           disabled={
-                            closingAllTerminals ||
                             !profile.detected ||
                             tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
                           }
@@ -1452,7 +1373,6 @@ export default function App() {
                       (profile) => (
                         <button
                           disabled={
-                            closingAllTerminals ||
                             !profile.detected ||
                             tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
                           }
@@ -1473,7 +1393,6 @@ export default function App() {
                   <strong>终端启动失败</strong>
                   <span>{activeTab.error}</span>
                   <button
-                    disabled={closingAllTerminals}
                     onClick={() => void restartTab(activeTab)}
                     type="button"
                   >
@@ -1487,7 +1406,6 @@ export default function App() {
                   <strong>终端连接已断开</strong>
                   <span>{activeTab.error || "后台 PTY 已结束，可重启该终端。"}</span>
                   <button
-                    disabled={closingAllTerminals}
                     onClick={() => void restartTab(activeTab)}
                     type="button"
                   >

@@ -60,7 +60,7 @@ export type TerminalCreated = {
 export type TerminalDataEvent = {
   terminalId: string;
   instanceId: string;
-  data: string;
+  data: number[];
 };
 
 export type TerminalExitEvent = {

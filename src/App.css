@@ -277,35 +277,6 @@ button {
   background: #fff0ed;
 }
 
-.close-all-terminals-icon {
-  position: relative;
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-}
-
-.close-all-terminals-icon svg:first-child {
-  position: absolute;
-  inset: 0;
-}
-
-.close-all-terminals-icon svg:last-child {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  padding: 1px;
-  border-radius: 999px;
-  background: var(--panel-bg);
-  color: inherit;
-  stroke-width: 3;
-}
-
-.icon-button:not(:disabled):hover .close-all-terminals-icon svg:last-child {
-  background: #fff0ed;
-}
-
 .project-list {
   min-height: 0;
   flex: 1;

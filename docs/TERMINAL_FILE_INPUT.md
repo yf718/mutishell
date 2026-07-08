@@ -101,8 +101,6 @@ Generated files are written to:
 The topbar cleanup button is labeled `清理临时文件`. It calls
 `clear_paste_temp_files` and removes only supported generated image files from
 that directory. It does not delete files that were copied from Explorer.
-The close-all-terminal button sits immediately to the left of this cleanup
-button and only closes terminal tabs/PTYs; it does not remove paste temp files.
 
 ## Verification
 
