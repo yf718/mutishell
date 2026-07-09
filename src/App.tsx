@@ -3,6 +3,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
+  ChevronDown,
   Circle,
   GripVertical,
   Images,
@@ -243,6 +244,8 @@ export default function App() {
   const shellProfileById = useMemo(() => {
     return new Map(shellProfiles.map((profile) => [profile.id, profile]));
   }, [shellProfiles]);
+  const defaultShellProfile =
+    shellProfileById.get(defaultShellProfileId) ?? null;
 
   const activeTabId = activeProjectId
     ? activeTabByProject[activeProjectId] ?? tabsForProject[0]?.id
@@ -1319,17 +1322,38 @@ export default function App() {
                   </button>
                   <button
                     className="icon-button compact-add"
+                    disabled={
+                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT ||
+                      !defaultShellProfile?.detected
+                    }
+                    onClick={() => {
+                      if (!defaultShellProfile?.detected) return;
+                      createTab(activeProject, defaultShellProfile);
+                    }}
+                    title={
+                      tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                        ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
+                        : defaultShellProfile?.detected
+                          ? `使用默认 Shell 新增终端：${defaultShellProfile.name}`
+                          : "默认 Shell Profile 不可用"
+                    }
+                    type="button"
+                  >
+                    <Plus size={15} />
+                  </button>
+                  <button
+                    className="icon-button compact-add"
                     data-new-terminal-control
                     disabled={tabsForProject.length >= MAX_TERMINALS_PER_PROJECT}
                     onClick={() => setNewTerminalOpen((current) => !current)}
                     title={
                       tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
                         ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
-                        : "新增终端"
+                        : "选择 Shell Profile 新增终端"
                     }
                     type="button"
                   >
-                    <Plus size={15} />
+                    <ChevronDown size={15} />
                   </button>
                   {newTerminalOpen && activeProject && (
                     <div className="terminal-menu tab-terminal-menu">
