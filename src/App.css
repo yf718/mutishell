@@ -255,6 +255,7 @@ button {
 }
 
 .primary-button:disabled,
+.default-terminal-button:disabled,
 .terminal-menu button:disabled,
 .quick-profiles button:disabled {
   cursor: not-allowed;
@@ -932,7 +933,64 @@ button {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
+  margin-top: 4px;
+}
+
+.default-terminal-button {
+  display: inline-flex;
+  min-width: 178px;
+  max-width: min(320px, 100%);
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   margin-top: 10px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(29, 111, 135, 0.18);
+}
+
+.default-terminal-button:not(:disabled):hover {
+  filter: brightness(1.06);
+}
+
+.default-terminal-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.default-terminal-label {
+  min-width: 0;
+  text-align: left;
+}
+
+.default-terminal-label strong {
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.default-terminal-label em {
+  display: block;
+  overflow: hidden;
+  max-width: 180px;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .quick-profiles button {

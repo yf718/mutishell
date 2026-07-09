@@ -1399,6 +1399,36 @@ export default function App() {
                   <SquareTerminal size={42} />
                   <strong>在 {activeProject.name} 打开一个终端</strong>
                   <span>{activeProject.path}</span>
+                  {defaultShellProfile && (
+                    <button
+                      className="default-terminal-button"
+                      disabled={
+                        tabsForProject.length >= MAX_TERMINALS_PER_PROJECT ||
+                        !defaultShellProfile.detected
+                      }
+                      onClick={() => {
+                        if (!defaultShellProfile.detected) return;
+                        createTab(activeProject, defaultShellProfile);
+                      }}
+                      title={
+                        tabsForProject.length >= MAX_TERMINALS_PER_PROJECT
+                          ? `每个项目最多 ${MAX_TERMINALS_PER_PROJECT} 个终端`
+                          : defaultShellProfile.detected
+                            ? `使用默认 Shell 新增终端：${defaultShellProfile.name}`
+                            : "默认 Shell Profile 不可用"
+                      }
+                      type="button"
+                    >
+                      <div className="default-terminal-icon">
+                        {iconForProfile(defaultShellProfile)}
+                      </div>
+                      <div className="default-terminal-label">
+                        <strong>新建</strong>
+                        <em>{defaultShellProfile.name}</em>
+                      </div>
+                      <Plus size={16} />
+                    </button>
+                  )}
                   <div className="quick-profiles">
                     {(detectedProfiles.length ? detectedProfiles : shellProfiles).map(
                       (profile) => (
