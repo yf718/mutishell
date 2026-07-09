@@ -1612,6 +1612,50 @@ function SettingsDialog({
                 </div>
               ))}
             </div>
+
+            <div className="settings-subsection">
+              <h2>终端行为</h2>
+              <label className="setting-range">
+                <span>
+                  <strong>终端字号</strong>
+                  <em>{terminalFontSize}px</em>
+                </span>
+                <div>
+                  <input
+                    max={MAX_TERMINAL_FONT_SIZE}
+                    min={MIN_TERMINAL_FONT_SIZE}
+                    onChange={(event) =>
+                      onTerminalFontSizeChange(Number(event.target.value))
+                    }
+                    type="range"
+                    value={terminalFontSize}
+                  />
+                  <input
+                    aria-label="终端字号"
+                    max={MAX_TERMINAL_FONT_SIZE}
+                    min={MIN_TERMINAL_FONT_SIZE}
+                    onChange={(event) =>
+                      onTerminalFontSizeChange(Number(event.target.value))
+                    }
+                    type="number"
+                    value={terminalFontSize}
+                  />
+                </div>
+              </label>
+              <label className="setting-toggle">
+                <input
+                  checked={copyOnSelect}
+                  onChange={(event) =>
+                    onCopyOnSelectChange(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>选中复制</strong>
+                  <em>鼠标选中终端文本后自动复制到系统剪贴板</em>
+                </span>
+              </label>
+            </div>
           </section>
 
           <section>
@@ -1639,50 +1683,6 @@ function SettingsDialog({
                 ))
               )}
             </div>
-          </section>
-
-          <section>
-            <h2>终端行为</h2>
-            <label className="setting-range">
-              <span>
-                <strong>终端字号</strong>
-                <em>{terminalFontSize}px</em>
-              </span>
-              <div>
-                <input
-                  max={MAX_TERMINAL_FONT_SIZE}
-                  min={MIN_TERMINAL_FONT_SIZE}
-                  onChange={(event) =>
-                    onTerminalFontSizeChange(Number(event.target.value))
-                  }
-                  type="range"
-                  value={terminalFontSize}
-                />
-                <input
-                  aria-label="终端字号"
-                  max={MAX_TERMINAL_FONT_SIZE}
-                  min={MIN_TERMINAL_FONT_SIZE}
-                  onChange={(event) =>
-                    onTerminalFontSizeChange(Number(event.target.value))
-                  }
-                  type="number"
-                  value={terminalFontSize}
-                />
-              </div>
-            </label>
-            <label className="setting-toggle">
-              <input
-                checked={copyOnSelect}
-                onChange={(event) =>
-                  onCopyOnSelectChange(event.target.checked)
-                }
-                type="checkbox"
-              />
-              <span>
-                <strong>选中复制</strong>
-                <em>鼠标选中终端文本后自动复制到系统剪贴板</em>
-              </span>
-            </label>
           </section>
         </div>
 

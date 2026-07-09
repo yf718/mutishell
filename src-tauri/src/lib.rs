@@ -113,6 +113,8 @@ pub struct AppStateFile {
     pub right_click_paste: bool,
     #[serde(default)]
     pub copy_on_select: bool,
+    #[serde(default = "default_terminal_font_size")]
+    pub terminal_font_size: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -613,6 +615,7 @@ fn default_app_state() -> AppStateFile {
         theme: default_theme(),
         right_click_paste: false,
         copy_on_select: false,
+        terminal_font_size: default_terminal_font_size(),
     }
 }
 
@@ -622,6 +625,10 @@ fn default_sidebar_width() -> f64 {
 
 fn default_theme() -> String {
     "dark".to_string()
+}
+
+fn default_terminal_font_size() -> f64 {
+    13.0
 }
 
 fn default_shell_profiles() -> Vec<ShellProfile> {
