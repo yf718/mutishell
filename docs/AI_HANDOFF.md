@@ -139,6 +139,10 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Closing a tab should call `terminal_close`.
 - Restart should remove the tab id from `startedTerminals` and wait for any
   current launch task before starting the replacement.
+- Before calling `terminal.reset()` during restart, discard queued old output
+  and wait for the current xterm `write` callback. Reset does not drain an
+  already-buffered xterm write, so resetting early can paint old-session bytes
+  into the replacement terminal.
 - PTY output must be routed by `terminalId` and current `instanceId`; never
   broadcast output to all tabs.
 - Frontend terminal output is usually flushed with `queueMicrotask` so adjacent
@@ -174,12 +178,12 @@ normalized to the sibling `bin\bash.exe` before spawning the PTY. Keep
 - Screenshot paste should prefer registered compressed image formats and fall
   back to Windows `CF_DIB` / `CF_DIBV5` bitmap data. Clipboard image payloads
   larger than 20 MB are rejected before copying them into process memory.
-- Keep the xterm helper textarea anchored to the fixed bottom IME dock for
-  Windows IME. Chinese input candidates can appear in the wrong screen location
-  in WebView2 if the helper textarea keeps its off-screen default position.
-- During IME composition, show the bottom dock as an overlay only. Do not shrink
-  the terminal mount or re-fit xterm during composition; that makes terminal rows
-  jump while typing.
+- Keep xterm's helper textarea and composition view on their native code path.
+  `TerminalView` reports composition start/end to `App`, which pauses frontend
+  output delivery per terminal while composition is active.
+- Do not fit, refresh, or rebuild the texture atlas during composition. Queue one
+  deferred visual update and release output only after xterm finishes committing
+  the composed text.
 - Current per-project tab limit is `MAX_TERMINALS_PER_PROJECT = 5` in
   `src/App.tsx`.
 

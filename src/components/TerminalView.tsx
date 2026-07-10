@@ -1,5 +1,4 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { Terminal } from "@xterm/xterm";
 import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -16,9 +15,10 @@ type TerminalViewProps = {
   theme: AppTheme;
   onInputError: (message: string) => void;
   onWriteError: (terminalId: string, error: unknown) => void;
-  onReady: (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => void;
+  onReady: (terminalId: string, terminal: Terminal, requestFit: () => void) => void;
   onDispose: (terminalId: string) => void;
   onResize: (terminalId: string, cols: number, rows: number) => void;
+  onCompositionChange: (terminalId: string, composing: boolean) => void;
 };
 
 const ALT_ENTER_SEQUENCE = "\x1b\r";
@@ -132,9 +132,8 @@ function TerminalViewComponent({
   onReady,
   onDispose,
   onResize,
+  onCompositionChange,
 }: TerminalViewProps) {
-  const [composing, setComposing] = useState(false);
-  const [compositionText, setCompositionText] = useState("");
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -143,9 +142,7 @@ function TerminalViewComponent({
   } | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const imeDockAnchorRef = useRef<HTMLSpanElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
   const contextMenuActionsRef = useRef<{
     copy: () => Promise<void>;
     paste: () => Promise<void>;
@@ -155,12 +152,22 @@ function TerminalViewComponent({
   const copyOnSelectRef = useRef(copyOnSelect);
   const composingRef = useRef(false);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
-  const imeAnchorFrameRef = useRef<number | null>(null);
   const refreshFrameRef = useRef<number | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
   const outputSettledTimeoutRef = useRef<number | null>(null);
   const lastFitSizeRef = useRef("");
   const suppressNextPasteEventRef = useRef(false);
+  const pendingFitRef = useRef(false);
+  const pendingRefreshRef = useRef(false);
+  const pendingTextureRefreshRef = useRef(false);
+  const requestFitRef = useRef<((clearTexture?: boolean) => void) | null>(null);
+  const requestRefreshRef = useRef<
+    ((clearTexture?: boolean) => void) | null
+  >(null);
+  const pendingFontSizeRef = useRef<number | null>(null);
+  const pendingThemeRef = useRef<AppTheme | null>(null);
+  const compositionEpochRef = useRef(0);
+  const compositionReleaseTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     activeRef.current = active;
@@ -179,6 +186,16 @@ function TerminalViewComponent({
     if (!container) {
       return;
     }
+
+    composingRef.current = false;
+    pendingFitRef.current = false;
+    pendingRefreshRef.current = false;
+    pendingTextureRefreshRef.current = false;
+    pendingFontSizeRef.current = null;
+    pendingThemeRef.current = null;
+    compositionEpochRef.current = 0;
+    compositionReleaseTimeoutRef.current = null;
+    lastFitSizeRef.current = "";
 
     const terminal = new Terminal({
       allowProposedApi: false,
@@ -203,9 +220,19 @@ function TerminalViewComponent({
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
 
-    const clearQueuedRefresh = () => {
+    let queuedRefreshClearsTexture = false;
+    const deferRefresh = (clearTexture = false) => {
+      pendingRefreshRef.current = true;
+      pendingTextureRefreshRef.current ||= clearTexture;
+    };
+    const clearQueuedRefresh = (defer = false) => {
+      if (
+        defer &&
+        (refreshFrameRef.current !== null || refreshTimeoutRef.current !== null)
+      ) {
+        deferRefresh(queuedRefreshClearsTexture);
+      }
       if (refreshFrameRef.current !== null) {
         window.cancelAnimationFrame(refreshFrameRef.current);
         refreshFrameRef.current = null;
@@ -214,8 +241,13 @@ function TerminalViewComponent({
         window.clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = null;
       }
+      queuedRefreshClearsTexture = false;
     };
     const refreshVisibleRows = (clearTexture = false) => {
+      if (composingRef.current) {
+        deferRefresh(clearTexture);
+        return;
+      }
       if (!activeRef.current) return;
       if (clearTexture) {
         terminal.clearTextureAtlas();
@@ -223,17 +255,24 @@ function TerminalViewComponent({
       terminal.refresh(0, terminal.rows - 1);
     };
     const queueRefresh = (clearTexture = false) => {
+      if (composingRef.current) {
+        deferRefresh(clearTexture);
+        return;
+      }
+      queuedRefreshClearsTexture ||= clearTexture;
       if (refreshFrameRef.current !== null) return;
       refreshFrameRef.current = window.requestAnimationFrame(() => {
         refreshFrameRef.current = null;
-        refreshVisibleRows(clearTexture);
+        const refreshClearsTexture = queuedRefreshClearsTexture;
+        queuedRefreshClearsTexture = false;
+        refreshVisibleRows(refreshClearsTexture);
 
         if (refreshTimeoutRef.current !== null) {
           window.clearTimeout(refreshTimeoutRef.current);
         }
         refreshTimeoutRef.current = window.setTimeout(() => {
           refreshTimeoutRef.current = null;
-          refreshVisibleRows(clearTexture);
+          refreshVisibleRows(refreshClearsTexture);
         }, 80);
       });
     };
@@ -253,7 +292,9 @@ function TerminalViewComponent({
       }, 64);
     };
     const writeParsedDisposable = terminal.onWriteParsed(() => {
-      hideCursorDuringOutput();
+      if (!composingRef.current) {
+        hideCursorDuringOutput();
+      }
     });
     const handleWheel = () => {
       setContextMenu(null);
@@ -371,115 +412,152 @@ function TerminalViewComponent({
     document.addEventListener("pointerdown", handleDocumentPointerDown);
     window.addEventListener("keydown", handleKeyDown);
 
-    const syncImeAnchor = () => {
-      const textarea = terminal.textarea;
-      const dockAnchor = imeDockAnchorRef.current;
-      if (!textarea || !dockAnchor) return;
-      const anchorRect = dockAnchor.getBoundingClientRect();
-      if (anchorRect.width <= 0 || anchorRect.height <= 0) {
+    const deferFit = (clearTexture = false) => {
+      pendingFitRef.current = true;
+      pendingTextureRefreshRef.current ||= clearTexture;
+    };
+    const fit = (clearTexture = false) => {
+      if (composingRef.current) {
+        deferFit(clearTexture);
         return;
       }
-
-      const width = Math.max(anchorRect.width, 120);
-      const height = Math.max(anchorRect.height, 24);
-      viewRef.current?.style.setProperty(
-        "--ime-anchor-fixed-left",
-        `${anchorRect.left}px`,
-      );
-      viewRef.current?.style.setProperty(
-        "--ime-anchor-fixed-top",
-        `${anchorRect.top}px`,
-      );
-      viewRef.current?.style.setProperty("--ime-anchor-width", `${width}px`);
-      viewRef.current?.style.setProperty(
-        "--ime-anchor-height",
-        `${height}px`,
-      );
-      textarea.style.position = "fixed";
-      textarea.style.left = `${anchorRect.left}px`;
-      textarea.style.top = `${anchorRect.top}px`;
-      textarea.style.width = `${width}px`;
-      textarea.style.height = `${height}px`;
-      textarea.style.lineHeight = `${height}px`;
-      textarea.style.zIndex = composingRef.current ? "30" : "-5";
-    };
-    const resetImeAnchor = () => {
-      if (!terminal.textarea) return;
-      terminal.textarea.style.position = "absolute";
-      terminal.textarea.style.left = "";
-      terminal.textarea.style.top = "";
-      terminal.textarea.style.width = "";
-      terminal.textarea.style.height = "";
-      terminal.textarea.style.lineHeight = "";
-      terminal.textarea.style.zIndex = "";
-    };
-    const fit = () => {
       try {
         if (container.clientWidth < 40 || container.clientHeight < 40) return;
         const previousSize = `${terminal.cols}x${terminal.rows}`;
         fitAddon.fit();
         const nextSize = `${terminal.cols}x${terminal.rows}`;
-        const sizeChanged = previousSize !== nextSize || lastFitSizeRef.current !== nextSize;
+        const sizeChanged =
+          previousSize !== nextSize || lastFitSizeRef.current !== nextSize;
         lastFitSizeRef.current = nextSize;
-        syncImeAnchor();
-        queueRefresh(sizeChanged);
+        queueRefresh(clearTexture || sizeChanged);
         onResize(tab.id, terminal.cols, terminal.rows);
       } catch {
         // xterm can throw if the element is detached during fast tab switching.
       }
     };
     let fitFrame: number | null = null;
-    const queueFit = () => {
+    let queuedFitClearsTexture = false;
+    const queueFit = (clearTexture = false) => {
+      if (composingRef.current) {
+        deferFit(clearTexture);
+        return;
+      }
+      queuedFitClearsTexture ||= clearTexture;
       if (fitFrame !== null) return;
       fitFrame = window.requestAnimationFrame(() => {
         fitFrame = null;
-        fit();
+        const fitClearsTexture = queuedFitClearsTexture;
+        queuedFitClearsTexture = false;
+        fit(fitClearsTexture);
       });
     };
-    const queueImeAnchorSync = () => {
-      if (!composingRef.current || imeAnchorFrameRef.current !== null) return;
-      imeAnchorFrameRef.current = window.requestAnimationFrame(() => {
-        imeAnchorFrameRef.current = null;
-        syncImeAnchor();
-      });
+    const cancelQueuedFit = () => {
+      if (fitFrame === null) return;
+      window.cancelAnimationFrame(fitFrame);
+      fitFrame = null;
+      deferFit(queuedFitClearsTexture);
+      queuedFitClearsTexture = false;
     };
-    const forceImeAnchorSync = () => {
-      syncImeAnchor();
-      queueImeAnchorSync();
-      window.setTimeout(syncImeAnchor, 0);
-      window.setTimeout(syncImeAnchor, 32);
+    const flushDeferredRendering = () => {
+      if (pendingFontSizeRef.current !== null) {
+        terminal.options.fontSize = pendingFontSizeRef.current;
+        pendingFontSizeRef.current = null;
+        pendingFitRef.current = true;
+        pendingTextureRefreshRef.current = true;
+      }
+      if (pendingThemeRef.current !== null) {
+        terminal.options.theme = { ...TERMINAL_THEMES[pendingThemeRef.current] };
+        pendingThemeRef.current = null;
+        pendingRefreshRef.current = true;
+        pendingTextureRefreshRef.current = true;
+      }
+
+      const shouldFit = pendingFitRef.current;
+      const shouldRefresh = pendingRefreshRef.current;
+      const clearTexture = pendingTextureRefreshRef.current;
+      pendingFitRef.current = false;
+      pendingRefreshRef.current = false;
+      pendingTextureRefreshRef.current = false;
+
+      if (shouldFit) {
+        queueFit(clearTexture);
+      } else if (shouldRefresh) {
+        queueRefresh(clearTexture);
+      }
+    };
+    requestFitRef.current = queueFit;
+    requestRefreshRef.current = queueRefresh;
+
+    const releaseComposition = () => {
+      if (compositionReleaseTimeoutRef.current !== null) {
+        window.clearTimeout(compositionReleaseTimeoutRef.current);
+        compositionReleaseTimeoutRef.current = null;
+      }
+      if (!composingRef.current) return;
+
+      compositionEpochRef.current += 1;
+      composingRef.current = false;
+      onCompositionChange(tab.id, false);
+      flushDeferredRendering();
     };
     const handleCompositionStart = () => {
+      compositionEpochRef.current += 1;
+      if (compositionReleaseTimeoutRef.current !== null) {
+        window.clearTimeout(compositionReleaseTimeoutRef.current);
+        compositionReleaseTimeoutRef.current = null;
+      }
+      if (composingRef.current) return;
+
       composingRef.current = true;
-      setComposing(true);
-      setCompositionText("");
-      forceImeAnchorSync();
+      clearQueuedRefresh(true);
+      cancelQueuedFit();
+      onCompositionChange(tab.id, true);
     };
-    const handleCompositionUpdate = (event: CompositionEvent) => {
-      setCompositionText(event.data);
-      forceImeAnchorSync();
+    const queueCompositionRelease = (afterCompositionEnd = false) => {
+      if (!composingRef.current) return;
+      if (compositionReleaseTimeoutRef.current !== null) {
+        if (!afterCompositionEnd) return;
+        window.clearTimeout(compositionReleaseTimeoutRef.current);
+      }
+
+      const compositionEpoch = compositionEpochRef.current;
+      compositionReleaseTimeoutRef.current = window.setTimeout(() => {
+        compositionReleaseTimeoutRef.current = null;
+        if (compositionEpoch !== compositionEpochRef.current) return;
+        releaseComposition();
+      }, 0);
     };
     const handleCompositionEnd = () => {
-      composingRef.current = false;
-      resetImeAnchor();
-      setComposing(false);
-      setCompositionText("");
+      // xterm queues its final composition commit from its earlier listener.
+      // A blur fallback may already be queued, so place this release after it.
+      queueCompositionRelease(true);
     };
-    const keepDockImeAnchor = () => {
-      forceImeAnchorSync();
+    const handleTextAreaBlur = () => {
+      queueCompositionRelease();
     };
-    terminal.textarea?.addEventListener("compositionstart", handleCompositionStart);
-    terminal.textarea?.addEventListener("compositionupdate", handleCompositionUpdate);
+    terminal.textarea?.addEventListener(
+      "compositionstart",
+      handleCompositionStart,
+      true,
+    );
     terminal.textarea?.addEventListener("compositionend", handleCompositionEnd);
-    terminal.textarea?.addEventListener("beforeinput", keepDockImeAnchor, true);
-    terminal.textarea?.addEventListener("input", keepDockImeAnchor, true);
+    terminal.textarea?.addEventListener("blur", handleTextAreaBlur);
 
-    const resizeObserver = new ResizeObserver(queueFit);
+    const resizeObserver = new ResizeObserver(() => queueFit());
     resizeObserver.observe(container);
     queueFit();
-    onReady(tab.id, terminal, fitAddon);
+    onReady(tab.id, terminal, queueFit);
 
     return () => {
+      if (compositionReleaseTimeoutRef.current !== null) {
+        window.clearTimeout(compositionReleaseTimeoutRef.current);
+        compositionReleaseTimeoutRef.current = null;
+      }
+      if (composingRef.current) {
+        compositionEpochRef.current += 1;
+        composingRef.current = false;
+        onCompositionChange(tab.id, false);
+      }
       inputDisposable.dispose();
       writeParsedDisposable.dispose();
       container.removeEventListener("wheel", handleWheel);
@@ -499,32 +577,23 @@ function TerminalViewComponent({
         window.cancelAnimationFrame(fitFrame);
         fitFrame = null;
       }
-      if (imeAnchorFrameRef.current !== null) {
-        window.cancelAnimationFrame(imeAnchorFrameRef.current);
-        imeAnchorFrameRef.current = null;
-      }
       terminal.textarea?.removeEventListener(
         "compositionstart",
         handleCompositionStart,
+        true,
       );
-      terminal.textarea?.removeEventListener(
-        "compositionupdate",
-        handleCompositionUpdate,
-      );
-      terminal.textarea?.removeEventListener(
-        "compositionend",
-        handleCompositionEnd,
-      );
-      terminal.textarea?.removeEventListener("beforeinput", keepDockImeAnchor, true);
-      terminal.textarea?.removeEventListener("input", keepDockImeAnchor, true);
+      terminal.textarea?.removeEventListener("compositionend", handleCompositionEnd);
+      terminal.textarea?.removeEventListener("blur", handleTextAreaBlur);
       resizeObserver.disconnect();
+      requestFitRef.current = null;
+      requestRefreshRef.current = null;
       onDispose(tab.id);
       terminal.dispose();
       terminalRef.current = null;
-      fitAddonRef.current = null;
     };
   }, [
     onDispose,
+    onCompositionChange,
     onInputError,
     onReady,
     onResize,
@@ -535,58 +604,43 @@ function TerminalViewComponent({
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    const fitAddon = fitAddonRef.current;
-    const container = containerRef.current;
-    if (!terminal || !fitAddon || !container) return;
+    if (!terminal) return;
+
+    if (composingRef.current) {
+      pendingFontSizeRef.current = terminalFontSize;
+      pendingFitRef.current = true;
+      pendingTextureRefreshRef.current = true;
+      return;
+    }
 
     terminal.options.fontSize = terminalFontSize;
-    try {
-      if (container.clientWidth >= 40 && container.clientHeight >= 40) {
-        fitAddon.fit();
-        onResize(tab.id, terminal.cols, terminal.rows);
-      }
-      terminal.clearTextureAtlas();
-      terminal.refresh(0, terminal.rows - 1);
-    } catch {
-      // The terminal may be hidden while settings are being changed.
-    }
-  }, [onResize, tab.id, terminalFontSize]);
+    requestFitRef.current?.(true);
+  }, [terminalFontSize]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
 
+    if (composingRef.current) {
+      pendingThemeRef.current = theme;
+      pendingRefreshRef.current = true;
+      pendingTextureRefreshRef.current = true;
+      return;
+    }
+
     terminal.options.theme = { ...TERMINAL_THEMES[theme] };
-    terminal.clearTextureAtlas();
-    terminal.refresh(0, terminal.rows - 1);
+    requestRefreshRef.current?.(true);
   }, [theme]);
 
   useEffect(() => {
-    if (!active || !fitAddonRef.current || !terminalRef.current) {
+    if (!active || !terminalRef.current) {
       return;
     }
 
     const fit = () => {
-      try {
-        if (!activeRef.current) return;
-        const fitAddon = fitAddonRef.current;
-        const terminal = terminalRef.current;
-        const container = containerRef.current;
-        if (
-          !fitAddon ||
-          !terminal ||
-          !container ||
-          container.clientWidth < 40 ||
-          container.clientHeight < 40
-        ) {
-          return;
-        }
-        fitAddon.fit();
-        terminal.focus();
-        onResize(tab.id, terminal.cols, terminal.rows);
-      } catch {
-        // Ignore transient layout reads while React is switching views.
-      }
+      if (!activeRef.current) return;
+      terminalRef.current?.focus();
+      requestFitRef.current?.();
     };
 
     const frameId = window.requestAnimationFrame(fit);
@@ -595,31 +649,17 @@ function TerminalViewComponent({
       window.cancelAnimationFrame(frameId);
       timeoutIds.forEach((id) => window.clearTimeout(id));
     };
-  }, [active, onResize, tab.id]);
+  }, [active]);
 
   return (
     <div
-      className={[
-        "terminal-view",
-        active ? "is-active" : "",
-        composing ? "is-composing" : "",
-      ]
+      className={["terminal-view", active ? "is-active" : ""]
         .filter(Boolean)
         .join(" ")}
       aria-hidden={!active}
       ref={viewRef}
-      style={{
-        "--ime-anchor-fixed-left": "220px",
-        "--ime-anchor-fixed-top": "calc(100vh - 76px)",
-      } as CSSProperties}
     >
       <div className="terminal-mount" ref={containerRef} />
-      <div className="terminal-ime-dock" aria-hidden="true">
-        <span className="terminal-ime-prompt">IME</span>
-        <span className="terminal-ime-text" ref={imeDockAnchorRef}>
-          {compositionText || " "}
-        </span>
-      </div>
       {contextMenu && active && (
         <div
           className="terminal-context-menu"
@@ -669,5 +709,6 @@ export const TerminalView = memo(
     previous.terminalFontSize === next.terminalFontSize &&
     previous.theme === next.theme &&
     previous.onInputError === next.onInputError &&
-    previous.onWriteError === next.onWriteError,
+    previous.onWriteError === next.onWriteError &&
+    previous.onCompositionChange === next.onCompositionChange,
 );

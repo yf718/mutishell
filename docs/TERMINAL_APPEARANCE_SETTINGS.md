@@ -5,8 +5,8 @@ This note documents the July 2026 terminal appearance changes.
 ## Scope
 
 - Light and dark UI theme now also drive xterm.js terminal colors.
-- Terminal mount, viewport, canvas, scrollbar, IME dock, and terminal context
-  menu colors use theme variables.
+- Terminal mount, viewport, canvas, scrollbar, and terminal context menu colors
+  use theme variables.
 - Terminal font size is configurable from Settings and persists in app state.
 - The unused tab rename action was removed.
 
@@ -38,9 +38,10 @@ updates mounted xterm instances immediately, then refits and refreshes them.
 
 ## IME And Cursor Handling
 
-The existing Windows IME dock remains in place. The xterm helper textarea stays
-anchored to the fixed bottom dock during composition so IME candidate windows do
-not appear at incorrect screen positions.
+xterm owns the helper textarea and composition view. When a native IME
+composition begins, mutishell pauses frontend output delivery for that terminal
+and defers fitting, refreshes, and texture-atlas rebuilding. The PTY continues
+to run; accumulated bytes are delivered after xterm commits the composed text.
 
 The cursor-hiding debounce during output also remains in place. It only hides
 the visible cursor briefly while output is being parsed; it does not alter PTY
@@ -71,7 +72,7 @@ TUIs.
 ## Verification
 
 - `npm run build` passes.
-- Light terminal background, Codex input panel, bottom terminal edge, IME dock,
-  and terminal right-click menu render in the light palette.
+- Light terminal background, Codex input panel, bottom terminal edge, and
+  terminal right-click menu render in the light palette.
 - Terminal font size changes apply to existing tabs without restarting the
   shell process.

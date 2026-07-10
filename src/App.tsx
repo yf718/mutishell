@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -56,7 +55,9 @@ const MAX_SIDEBAR_WIDTH = 220;
 const DEFAULT_TERMINAL_FONT_SIZE = 13;
 const MIN_TERMINAL_FONT_SIZE = 11;
 const MAX_TERMINAL_FONT_SIZE = 22;
-const MAX_TERMINAL_WRITE_BYTES_PER_FRAME = 256 * 1024;
+// A composition can begin while xterm is still parsing a previous write. Keep
+// that in-flight window small so native IME positioning settles quickly.
+const MAX_TERMINAL_WRITE_BYTES_PER_FRAME = 64 * 1024;
 const MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME = 1024 * 1024;
 
 type TerminalOutputQueue = {
@@ -202,8 +203,13 @@ export default function App() {
   const [clearingPasteTempFiles, setClearingPasteTempFiles] = useState(false);
 
   const terminalRefs = useRef(new Map<string, Terminal>());
-  const fitAddonRefs = useRef(new Map<string, FitAddon>());
+  const terminalFitRequests = useRef(new Map<string, () => void>());
   const terminalOutputQueues = useRef(new Map<string, TerminalOutputQueue>());
+  const composingTerminalIds = useRef(new Set<string>());
+  const terminalOutputWritesInFlight = useRef(new Map<string, symbol>());
+  const terminalOutputIdleWaiters = useRef(
+    new Map<string, Array<() => void>>(),
+  );
   const terminalOutputFlushScheduled = useRef(false);
   const terminalOutputActive = useRef(true);
   const terminalOutputBytesSinceFrame = useRef(0);
@@ -323,6 +329,37 @@ export default function App() {
     [],
   );
 
+  const resolveTerminalOutputIdleWaiters = useCallback((terminalId: string) => {
+    const waiters = terminalOutputIdleWaiters.current.get(terminalId);
+    if (!waiters) return;
+
+    terminalOutputIdleWaiters.current.delete(terminalId);
+    for (const resolve of waiters) resolve();
+  }, []);
+
+  const discardQueuedTerminalOutput = useCallback((terminalId: string) => {
+    terminalOutputQueues.current.delete(terminalId);
+    composingTerminalIds.current.delete(terminalId);
+  }, []);
+
+  const clearTerminalOutputState = useCallback((terminalId: string) => {
+    discardQueuedTerminalOutput(terminalId);
+    terminalOutputWritesInFlight.current.delete(terminalId);
+    resolveTerminalOutputIdleWaiters(terminalId);
+  }, [discardQueuedTerminalOutput, resolveTerminalOutputIdleWaiters]);
+
+  const waitForTerminalOutputIdle = useCallback((terminalId: string) => {
+    if (!terminalOutputWritesInFlight.current.has(terminalId)) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      const waiters = terminalOutputIdleWaiters.current.get(terminalId) ?? [];
+      waiters.push(resolve);
+      terminalOutputIdleWaiters.current.set(terminalId, waiters);
+    });
+  }, []);
+
   const markLaunchIdleIfTabExists = useCallback((tabId: string) => {
     if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
     setTabs((current) =>
@@ -340,6 +377,7 @@ export default function App() {
         return terminalLaunchTasks.current.get(tab.id) ?? Promise.resolve();
       }
 
+      clearTerminalOutputState(tab.id);
       const previousLaunch = terminalLaunchTasks.current.get(tab.id);
       const launchTask = (async () => {
         if (previousLaunch) {
@@ -437,7 +475,7 @@ export default function App() {
       });
       return launchTask;
     },
-    [markLaunchIdleIfTabExists, terminalLaunchStillValid],
+    [clearTerminalOutputState, markLaunchIdleIfTabExists, terminalLaunchStillValid],
   );
 
   const createTab = useCallback(
@@ -534,6 +572,7 @@ export default function App() {
         startedTerminals.current.delete(tab.id);
         terminalLaunchTasks.current.delete(tab.id);
         terminalInstanceIds.current.delete(tab.id);
+        clearTerminalOutputState(tab.id);
         void closeTerminal(tab.id);
       }
       setTabs((current) => current.filter((tab) => tab.projectId !== projectId));
@@ -550,7 +589,7 @@ export default function App() {
         setActiveProjectId(nextProject?.id ?? null);
       }
     },
-    [activeProjectId, projects, tabs],
+    [activeProjectId, clearTerminalOutputState, projects, tabs],
   );
 
   const moveProject = useCallback((sourceId: string, targetId: string) => {
@@ -631,6 +670,7 @@ export default function App() {
       startedTerminals.current.delete(tabId);
       terminalLaunchTasks.current.delete(tabId);
       terminalInstanceIds.current.delete(tabId);
+      clearTerminalOutputState(tabId);
       void closeTerminal(tabId);
       setTabs((current) => current.filter((tab) => tab.id !== tabId));
       setActiveTabByProject((current) => {
@@ -645,7 +685,7 @@ export default function App() {
         return next;
       });
     },
-    [tabs],
+    [clearTerminalOutputState, tabs],
   );
 
   const restartTab = useCallback(
@@ -657,11 +697,19 @@ export default function App() {
       startedTerminals.current.delete(tab.id);
       terminalLaunchTasks.current.delete(tab.id);
       terminalInstanceIds.current.delete(tab.id);
+      discardQueuedTerminalOutput(tab.id);
       await closeTerminal(tab.id).catch(() => undefined);
+      await waitForTerminalOutputIdle(tab.id);
+      clearTerminalOutputState(tab.id);
       terminalRefs.current.get(tab.id)?.reset();
       void startTerminal({ ...tab, status: "idle" });
     },
-    [startTerminal],
+    [
+      clearTerminalOutputState,
+      discardQueuedTerminalOutput,
+      startTerminal,
+      waitForTerminalOutputIdle,
+    ],
   );
 
   const handleTerminalWriteError = useCallback(
@@ -669,6 +717,7 @@ export default function App() {
       startedTerminals.current.delete(terminalId);
       terminalLaunchTasks.current.delete(terminalId);
       terminalInstanceIds.current.delete(terminalId);
+      clearTerminalOutputState(terminalId);
       void closeTerminal(terminalId).catch(() => undefined);
       setTabs((current) =>
         current.map((tab) =>
@@ -682,7 +731,7 @@ export default function App() {
         ),
       );
     },
-    [],
+    [clearTerminalOutputState],
   );
 
   const handleTerminalInputError = useCallback((message: string) => {
@@ -767,9 +816,9 @@ export default function App() {
   );
 
   const registerTerminal = useCallback(
-    (terminalId: string, terminal: Terminal, fitAddon: FitAddon) => {
+    (terminalId: string, terminal: Terminal, requestFit: () => void) => {
       terminalRefs.current.set(terminalId, terminal);
-      fitAddonRefs.current.set(terminalId, fitAddon);
+      terminalFitRequests.current.set(terminalId, requestFit);
       ensureTerminalStarted(terminalId);
       window.setTimeout(() => ensureTerminalStarted(terminalId), 0);
     },
@@ -778,12 +827,12 @@ export default function App() {
 
   const unregisterTerminal = useCallback((terminalId: string) => {
     terminalRefs.current.delete(terminalId);
-    fitAddonRefs.current.delete(terminalId);
-    terminalOutputQueues.current.delete(terminalId);
+    terminalFitRequests.current.delete(terminalId);
+    clearTerminalOutputState(terminalId);
     terminalLaunchTasks.current.delete(terminalId);
     terminalInstanceIds.current.delete(terminalId);
     terminalSizeRefs.current.delete(terminalId);
-  }, []);
+  }, [clearTerminalOutputState]);
 
   const resizeTerminalIfChanged = useCallback(
     (terminalId: string, cols: number, rows: number) => {
@@ -797,30 +846,74 @@ export default function App() {
 
   const flushTerminalOutput = useCallback(() => {
     terminalOutputFlushScheduled.current = false;
-    let hasMoreOutput = false;
+    if (!terminalOutputActive.current) return;
+
     let flushedByteLength = 0;
     let reachedFlushBudget = false;
     for (const [terminalId, queue] of terminalOutputQueues.current) {
       if (flushedByteLength >= MAX_TERMINAL_FLUSH_BYTES_BEFORE_FRAME) {
-        hasMoreOutput = true;
         reachedFlushBudget = true;
         break;
+      }
+
+      if (
+        composingTerminalIds.current.has(terminalId) ||
+        terminalOutputWritesInFlight.current.has(terminalId)
+      ) {
+        continue;
+      }
+
+      const terminal = terminalRefs.current.get(terminalId);
+      if (!terminal) {
+        clearTerminalOutputState(terminalId);
+        continue;
       }
 
       const data = takeTerminalOutputBatch(queue);
       if (queue.byteLength === 0) {
         terminalOutputQueues.current.delete(terminalId);
-      } else {
-        hasMoreOutput = true;
       }
       if (data.byteLength === 0) continue;
-      terminalRefs.current.get(terminalId)?.write(data);
+
+      const writeToken = Symbol(terminalId);
+      terminalOutputWritesInFlight.current.set(terminalId, writeToken);
+      try {
+        terminal.write(data, () => {
+          if (terminalOutputWritesInFlight.current.get(terminalId) !== writeToken) {
+            return;
+          }
+
+          terminalOutputWritesInFlight.current.delete(terminalId);
+          resolveTerminalOutputIdleWaiters(terminalId);
+          if (
+            !terminalOutputActive.current ||
+            composingTerminalIds.current.has(terminalId) ||
+            !terminalOutputQueues.current.has(terminalId) ||
+            terminalOutputFlushScheduled.current
+          ) {
+            return;
+          }
+
+          terminalOutputFlushScheduled.current = true;
+          queueMicrotask(flushTerminalOutput);
+        });
+      } catch {
+        if (terminalOutputWritesInFlight.current.get(terminalId) === writeToken) {
+          clearTerminalOutputState(terminalId);
+        }
+      }
       flushedByteLength += data.byteLength;
     }
 
+    const hasFlushableOutput = [...terminalOutputQueues.current].some(
+      ([terminalId, queue]) =>
+        queue.byteLength > 0 &&
+        terminalRefs.current.has(terminalId) &&
+        !composingTerminalIds.current.has(terminalId) &&
+        !terminalOutputWritesInFlight.current.has(terminalId),
+    );
     if (
-      hasMoreOutput &&
-      terminalOutputActive.current &&
+      hasFlushableOutput &&
       !terminalOutputFlushScheduled.current
     ) {
       const bytesSinceFrame =
@@ -837,10 +930,10 @@ export default function App() {
         terminalOutputBytesSinceFrame.current = bytesSinceFrame;
         queueMicrotask(flushTerminalOutput);
       }
-    } else if (!hasMoreOutput) {
+    } else if (!hasFlushableOutput) {
       terminalOutputBytesSinceFrame.current = 0;
     }
-  }, []);
+  }, [clearTerminalOutputState, resolveTerminalOutputIdleWaiters]);
 
   const enqueueTerminalOutput = useCallback(
     (terminalId: string, data: number[] | Uint8Array) => {
@@ -858,7 +951,35 @@ export default function App() {
         });
       }
 
-      if (!terminalOutputFlushScheduled.current) {
+      if (
+        composingTerminalIds.current.has(terminalId) ||
+        terminalOutputWritesInFlight.current.has(terminalId) ||
+        terminalOutputFlushScheduled.current
+      ) {
+        return;
+      }
+
+      terminalOutputFlushScheduled.current = true;
+      queueMicrotask(flushTerminalOutput);
+    },
+    [flushTerminalOutput],
+  );
+
+  const handleTerminalCompositionChange = useCallback(
+    (terminalId: string, composing: boolean) => {
+      if (composing) {
+        composingTerminalIds.current.add(terminalId);
+        return;
+      }
+
+      composingTerminalIds.current.delete(terminalId);
+      terminalOutputBytesSinceFrame.current = 0;
+      if (
+        terminalOutputActive.current &&
+        terminalOutputQueues.current.has(terminalId) &&
+        !terminalOutputWritesInFlight.current.has(terminalId) &&
+        !terminalOutputFlushScheduled.current
+      ) {
         terminalOutputFlushScheduled.current = true;
         queueMicrotask(flushTerminalOutput);
       }
@@ -868,24 +989,19 @@ export default function App() {
 
   const fitActiveTerminal = useCallback(() => {
     if (!activeTabId) return;
-    const terminal = terminalRefs.current.get(activeTabId);
-    const fitAddon = fitAddonRefs.current.get(activeTabId);
-    if (!terminal || !fitAddon) return;
+    if (!terminalFitRequests.current.has(activeTabId)) return;
 
     const fit = () => {
-      try {
-        fitAddon.fit();
-        terminal.focus();
-        resizeTerminalIfChanged(activeTabId, terminal.cols, terminal.rows);
-      } catch {
-        // The terminal may not be visible yet.
-      }
+      if (activeTabIdRef.current !== activeTabId) return;
+      const requestFit = terminalFitRequests.current.get(activeTabId);
+      if (!requestFit) return;
+      requestFit();
     };
 
     window.requestAnimationFrame(fit);
     window.setTimeout(fit, 60);
     window.setTimeout(fit, 180);
-  }, [activeTabId, resizeTerminalIfChanged]);
+  }, [activeTabId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1045,14 +1161,25 @@ export default function App() {
   }, [newTerminalOpen]);
 
   useEffect(() => {
+    terminalOutputActive.current = true;
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
     void onTerminalData(({ terminalId, instanceId, data }) => {
       if (terminalInstanceIds.current.get(terminalId) !== instanceId) return;
       enqueueTerminalOutput(terminalId, data);
-    }).then((unlisten) => unlisteners.push(unlisten));
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlisteners.push(unlisten);
+      })
+      .catch(() => undefined);
 
     void onTerminalExit(({ terminalId, instanceId }) => {
       if (terminalInstanceIds.current.get(terminalId) !== instanceId) return;
+      handleTerminalCompositionChange(terminalId, false);
       startedTerminals.current.delete(terminalId);
       terminalLaunchTasks.current.delete(terminalId);
       terminalInstanceIds.current.delete(terminalId);
@@ -1068,15 +1195,30 @@ export default function App() {
             : tab,
         ),
       );
-    }).then((unlisten) => unlisteners.push(unlisten));
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlisteners.push(unlisten);
+      })
+      .catch(() => undefined);
 
     return () => {
+      disposed = true;
       terminalOutputActive.current = false;
       for (const unlisten of unlisteners) unlisten();
       terminalOutputFlushScheduled.current = false;
-      flushTerminalOutput();
+      terminalOutputQueues.current.clear();
+      composingTerminalIds.current.clear();
+      terminalOutputWritesInFlight.current.clear();
+      for (const waiters of terminalOutputIdleWaiters.current.values()) {
+        for (const resolve of waiters) resolve();
+      }
+      terminalOutputIdleWaiters.current.clear();
     };
-  }, [enqueueTerminalOutput, flushTerminalOutput]);
+  }, [enqueueTerminalOutput, handleTerminalCompositionChange]);
 
   useEffect(() => {
     const onBeforeUnload = () => {
@@ -1385,6 +1527,7 @@ export default function App() {
                   copyOnSelect={copyOnSelect}
                   key={tab.id}
                   onDispose={unregisterTerminal}
+                  onCompositionChange={handleTerminalCompositionChange}
                   onInputError={handleTerminalInputError}
                   onReady={registerTerminal}
                   onResize={resizeTerminalIfChanged}

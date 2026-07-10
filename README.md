@@ -240,9 +240,9 @@ This is important because users may install Git Bash outside
   to xterm's own paste path; the paste manager writes LF-normalized bracketed
   paste markers for multiline text so TUIs such as Codex do not treat pasted
   CRLF newlines as submit keys.
-- Keep Windows IME anchored to the fixed bottom dock in `TerminalView`. Do not
-  resize/refit xterm during composition because that makes terminal rows jump
-  while typing.
+- Let xterm own its helper textarea and composition view. While an IME
+  composition is active, pause frontend terminal writes plus fit/refresh work;
+  release queued output only after xterm commits the composed input.
 - If splitting `App.tsx`, move project/tab mutations into a small store first,
   then split visual components.
 - Do not persist large terminal output by default. It can make startup slow and
