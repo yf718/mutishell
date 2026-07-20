@@ -1,36 +1,18 @@
 [package]
 name = "mutishell"
 version = "0.1.0"
-description = "A fast Windows terminal workspace manager"
+description = "A native Windows project terminal launcher"
 authors = ["mutishell"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "mutishell_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+crate-type = ["rlib"]
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-single-instance = "2"
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "glow"] }
+rfd = "0.17"
+tray-icon = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
-portable-pty = "0.9"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-windows-sys = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_System_DataExchange",
-  "Win32_UI_Shell",
-  "Win32_System_Memory",
-] }

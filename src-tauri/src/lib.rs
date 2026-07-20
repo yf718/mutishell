@@ -1,634 +1,845 @@
-use chrono::Utc;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use eframe::egui::{
+    self, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Sense, Vec2,
+    ViewportCommand,
+};
+use eframe::egui::containers::{CentralPanel, Panel};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Listener, Manager};
-use uuid::Uuid;
+use tray_icon::{
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    Icon, TrayIcon, TrayIconBuilder,
+};
 
 const APP_DIR_NAME: &str = "mutishell";
 const STATE_FILE_NAME: &str = "state.json";
-const MAX_CLIPBOARD_IMAGE_BYTES: usize = 20 * 1024 * 1024;
-const CLIPBOARD_IMAGE_FORMATS: &[ClipboardImageFormat] = &[
-    ClipboardImageFormat {
-        name: "image/png",
-        extension: "png",
-    },
-    ClipboardImageFormat {
-        name: "PNG",
-        extension: "png",
-    },
-    ClipboardImageFormat {
-        name: "image/jpeg",
-        extension: "jpg",
-    },
-    ClipboardImageFormat {
-        name: "image/jpg",
-        extension: "jpg",
-    },
-    ClipboardImageFormat {
-        name: "image/bmp",
-        extension: "bmp",
-    },
-    ClipboardImageFormat {
-        name: "image/webp",
-        extension: "webp",
-    },
-];
+const DEFAULT_SIDEBAR_WIDTH: f32 = 220.0;
+const MIN_SIDEBAR_WIDTH: f32 = 160.0;
+const MAX_SIDEBAR_WIDTH: f32 = 360.0;
 
 type AppResult<T> = Result<T, String>;
 
-struct ClipboardImageFormat {
-    name: &'static str,
-    extension: &'static str,
-}
-
-#[cfg(windows)]
-enum ClipboardFileInput {
-    Paths(Vec<String>),
-    Image {
-        bytes: Vec<u8>,
-        extension: &'static str,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellProfile {
+    id: String,
+    name: String,
+    executable: String,
+    args: Vec<String>,
+    icon: String,
+    detected: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ShellProfile {
-    pub id: String,
-    pub name: String,
-    pub executable: String,
-    pub args: Vec<String>,
-    pub icon: String,
-    pub detected: bool,
+struct Project {
+    id: String,
+    name: String,
+    path: String,
+    created_at: String,
+    last_opened_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub created_at: String,
-    pub last_opened_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SavedTab {
-    pub id: String,
-    pub project_id: String,
-    pub title: String,
-    pub shell_profile_id: String,
-    pub cwd: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppStateFile {
-    pub version: u32,
-    pub projects: Vec<Project>,
-    pub tabs: Vec<SavedTab>,
-    pub active_project_id: Option<String>,
-    pub active_tab_by_project: HashMap<String, String>,
-    pub shell_profiles: Vec<ShellProfile>,
-    pub default_shell_profile_id: String,
+struct AppStateFile {
+    version: u32,
+    projects: Vec<Project>,
+    active_project_id: Option<String>,
+    shell_profiles: Vec<ShellProfile>,
+    default_shell_profile_id: String,
     #[serde(default = "default_sidebar_width")]
-    pub sidebar_width: f64,
+    sidebar_width: f32,
     #[serde(default = "default_theme")]
-    pub theme: String,
-    #[serde(default)]
-    pub right_click_paste: bool,
-    #[serde(default)]
-    pub copy_on_select: bool,
-    #[serde(default = "default_terminal_font_size")]
-    pub terminal_font_size: f64,
+    theme: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalCreateRequest {
-    pub terminal_id: Option<String>,
-    pub terminal_instance_id: Option<String>,
-    pub shell_profile_id: String,
-    pub shell_profile: Option<ShellProfile>,
-    pub cwd: String,
-    pub title: Option<String>,
-    pub cols: Option<u16>,
-    pub rows: Option<u16>,
+struct TrayHandle {
+    _icon: TrayIcon,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalCreated {
-    pub id: String,
-    pub instance_id: String,
-    pub pid: Option<u32>,
+struct MutishellApp {
+    state: AppStateFile,
+    query: String,
+    notice: Option<String>,
+    settings_open: bool,
+    settings_profiles: Vec<ShellProfile>,
+    settings_default_profile_id: String,
+    dragged_project_id: Option<String>,
+    tray: Option<TrayHandle>,
+    tray_signature: String,
+    minimized_to_tray: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalDataEvent {
-    pub terminal_id: String,
-    pub instance_id: String,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalExitEvent {
-    pub terminal_id: String,
-    pub instance_id: String,
-}
-
-struct TerminalProcess {
-    instance_id: String,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
-    master: Box<dyn MasterPty + Send>,
-    alive: Arc<AtomicBool>,
-}
-
-#[derive(Default)]
-struct TerminalRegistry {
-    terminals: Mutex<HashMap<String, TerminalProcess>>,
-}
-
-impl TerminalRegistry {
-    fn insert(&self, id: String, terminal: TerminalProcess) -> AppResult<()> {
-        let replaced = {
-            let mut terminals = self.terminals.lock().map_err(lock_error)?;
-            terminals.insert(id, terminal)
+impl MutishellApp {
+    fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
+        install_chinese_font(&creation_context.egui_ctx);
+        let (state, notice) = match load_app_state() {
+            Ok(state) => (state, None),
+            Err(error) => (default_app_state(), Some(format!("加载配置失败：{error}"))),
         };
-        if let Some(terminal) = replaced {
-            shutdown_terminal(terminal);
-        }
-        Ok(())
-    }
+        apply_theme(&creation_context.egui_ctx, &state.theme);
 
-    fn write(&self, id: &str, data: &str) -> AppResult<()> {
-        let mut terminals = self.terminals.lock().map_err(lock_error)?;
-        let terminal = terminals
-            .get_mut(id)
-            .ok_or_else(|| format!("Terminal '{id}' is not running"))?;
-        terminal
-            .writer
-            .write_all(data.as_bytes())
-            .map_err(|err| format!("Failed to write terminal input: {err}"))?;
-        terminal
-            .writer
-            .flush()
-            .map_err(|err| format!("Failed to flush terminal input: {err}"))?;
-        Ok(())
-    }
-
-    fn resize(&self, id: &str, cols: u16, rows: u16) -> AppResult<()> {
-        let terminals = self.terminals.lock().map_err(lock_error)?;
-        let terminal = terminals
-            .get(id)
-            .ok_or_else(|| format!("Terminal '{id}' is not running"))?;
-        terminal
-            .master
-            .resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| format!("Failed to resize terminal: {err}"))
-    }
-
-    fn close(&self, id: &str) -> AppResult<()> {
-        let terminal = {
-            let mut terminals = self.terminals.lock().map_err(lock_error)?;
-            terminals.remove(id)
+        let mut app = Self {
+            settings_profiles: state.shell_profiles.clone(),
+            settings_default_profile_id: state.default_shell_profile_id.clone(),
+            state,
+            query: String::new(),
+            notice,
+            settings_open: false,
+            dragged_project_id: None,
+            tray: None,
+            tray_signature: String::new(),
+            minimized_to_tray: false,
         };
-        if let Some(terminal) = terminal {
-            shutdown_terminal(terminal);
-        }
-        Ok(())
+        app.rebuild_tray();
+        app
     }
 
-    fn close_instance(&self, id: &str, instance_id: &str) -> AppResult<()> {
-        let terminal = {
-            let mut terminals = self.terminals.lock().map_err(lock_error)?;
-            if terminals
-                .get(id)
-                .is_some_and(|terminal| terminal.instance_id == instance_id)
-            {
-                terminals.remove(id)
-            } else {
-                None
+    fn persist(&mut self) {
+        if let Err(error) = save_app_state(&self.state) {
+            self.notice = Some(format!("保存配置失败：{error}"));
+        }
+    }
+
+    fn rebuild_tray(&mut self) {
+        let signature = self
+            .state
+            .projects
+            .iter()
+            .map(|project| format!("{}:{}:{}", project.id, project.name, project.path))
+            .collect::<Vec<_>>()
+            .join("|");
+        if signature == self.tray_signature && self.tray.is_some() {
+            return;
+        }
+
+        match build_tray(&self.state.projects) {
+            Ok(tray) => {
+                self.tray = Some(tray);
+                self.tray_signature = signature;
+            }
+            Err(error) => {
+                self.notice = Some(format!("创建托盘图标失败：{error}"));
+            }
+        }
+    }
+
+    fn active_project(&self) -> Option<Project> {
+        self.state
+            .active_project_id
+            .as_ref()
+            .and_then(|id| self.state.projects.iter().find(|project| &project.id == id))
+            .cloned()
+    }
+
+    fn select_project(&mut self, project_id: String) {
+        self.state.active_project_id = Some(project_id.clone());
+        if let Some(project) = self
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        {
+            project.last_opened_at = now_string();
+        }
+        self.persist();
+    }
+
+    fn add_project(&mut self) {
+        let Some(path) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        let path = path.to_string_lossy().to_string();
+        let path = match normalize_existing_dir(&path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.notice = Some(error);
+                return;
             }
         };
-        if let Some(terminal) = terminal {
-            shutdown_terminal(terminal);
-        }
-        Ok(())
-    }
 
-    fn remove_instance(&self, id: &str, instance_id: &str) -> AppResult<()> {
-        let mut terminals = self.terminals.lock().map_err(lock_error)?;
-        if terminals
-            .get(id)
-            .is_some_and(|terminal| terminal.instance_id == instance_id)
+        if let Some(existing) = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.path.eq_ignore_ascii_case(&path))
         {
-            terminals.remove(id);
+            self.select_project(existing.id.clone());
+            return;
         }
-        Ok(())
-    }
 
-    fn close_all(&self) -> AppResult<()> {
-        let terminals: Vec<TerminalProcess> = {
-            let mut terminals = self.terminals.lock().map_err(lock_error)?;
-            terminals.drain().map(|(_, terminal)| terminal).collect()
+        let now = now_string();
+        let project = Project {
+            id: make_id("project"),
+            name: path_base_name(&path),
+            path,
+            created_at: now.clone(),
+            last_opened_at: now,
         };
-        for terminal in terminals {
-            shutdown_terminal(terminal);
+        self.state.active_project_id = Some(project.id.clone());
+        self.state.projects.push(project);
+        self.persist();
+        self.rebuild_tray();
+    }
+
+    fn remove_project(&mut self, project_id: &str) {
+        self.state.projects.retain(|project| project.id != project_id);
+        if self.state.active_project_id.as_deref() == Some(project_id) {
+            self.state.active_project_id = self.state.projects.first().map(|project| project.id.clone());
         }
-        Ok(())
+        self.persist();
+        self.rebuild_tray();
+    }
+
+    fn reorder_project(&mut self, source_id: &str, target_id: &str, insert_after: bool) -> bool {
+        if source_id == target_id {
+            return false;
+        }
+        let Some(source_index) = self
+            .state
+            .projects
+            .iter()
+            .position(|project| project.id == source_id)
+        else {
+            return false;
+        };
+        let project = self.state.projects.remove(source_index);
+        let Some(target_index) = self
+            .state
+            .projects
+            .iter()
+            .position(|project| project.id == target_id)
+        else {
+            self.state.projects.insert(source_index, project);
+            return false;
+        };
+        let insert_index = target_index + usize::from(insert_after);
+        self.state.projects.insert(insert_index, project);
+        true
+    }
+
+    fn launch_profile(&mut self, project: &Project, profile: &ShellProfile) {
+        match launch_external_terminal(project, profile) {
+            Ok(()) => {
+                self.notice = Some(format!("已在 {} 打开 {}", project.name, profile.name));
+            }
+            Err(error) => {
+                self.notice = Some(format!("启动 {} 失败：{error}", profile.name));
+            }
+        }
+    }
+
+    fn launch_default_for_project(&mut self, project_id: &str) {
+        let project = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned();
+        let profile = self
+            .state
+            .shell_profiles
+            .iter()
+            .find(|profile| profile.id == self.state.default_shell_profile_id)
+            .cloned();
+        match (project, profile) {
+            (Some(project), Some(profile)) => self.launch_profile(&project, &profile),
+            (_, None) => self.notice = Some("未配置默认 Shell。".to_string()),
+            (None, _) => self.notice = Some("目录已不存在。".to_string()),
+        }
+    }
+
+    fn process_tray_events(&mut self, ctx: &egui::Context) {
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            let menu_id = event.id.0.as_str();
+            if let Some(project_id) = menu_id.strip_prefix("open-project:") {
+                self.launch_default_for_project(project_id);
+                continue;
+            }
+            match menu_id {
+                "show-window" => {
+                    self.minimized_to_tray = false;
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
+                "quit-application" => ctx.send_viewport_cmd(ViewportCommand::Close),
+                _ => {}
+            }
+        }
+    }
+
+    fn top_bar(&mut self, root_ui: &mut egui::Ui) {
+        Panel::top("top-bar").show(root_ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if let Some(project) = self.active_project() {
+                    ui.vertical(|ui| {
+                        ui.strong(&project.name);
+                        ui.label(egui::RichText::new(project.path).small().weak());
+                    });
+                } else {
+                    ui.heading("mutishell");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let theme_label = if self.state.theme == "dark" {
+                        "浅色"
+                    } else {
+                        "深色"
+                    };
+                    if ui.button(theme_label).clicked() {
+                        self.state.theme = if self.state.theme == "dark" {
+                            "light".to_string()
+                        } else {
+                            "dark".to_string()
+                        };
+                        apply_theme(ui.ctx(), &self.state.theme);
+                        self.persist();
+                    }
+                    if ui.button("设置").clicked() {
+                        self.settings_profiles = self.state.shell_profiles.clone();
+                        self.settings_default_profile_id =
+                            self.state.default_shell_profile_id.clone();
+                        self.settings_open = true;
+                    }
+                    if let Some(project) = self.active_project() {
+                        if ui.button("打开目录").clicked() {
+                            if let Err(error) = open_path_in_explorer(&project.path) {
+                                self.notice = Some(format!("打开资源管理器失败：{error}"));
+                            }
+                        }
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        });
+    }
+
+    fn sidebar(&mut self, root_ui: &mut egui::Ui) {
+        let projects = self
+            .state
+            .projects
+            .iter()
+            .filter(|project| {
+                let query = self.query.trim().to_lowercase();
+                query.is_empty()
+                    || project.name.to_lowercase().contains(&query)
+                    || project.path.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let sorting_allowed = self.query.trim().is_empty();
+        let panel = Panel::left("projects-sidebar")
+            .resizable(true)
+            .min_size(MIN_SIDEBAR_WIDTH)
+            .max_size(MAX_SIDEBAR_WIDTH)
+            .default_size(self.state.sidebar_width)
+            .show(root_ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("目录");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("+ 添加").clicked() {
+                            self.add_project();
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.query)
+                        .hint_text("搜索目录")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("项目").small().weak());
+                ui.add_space(2.0);
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if projects.is_empty() {
+                            let label = if self.state.projects.is_empty() {
+                                "还没有项目目录"
+                            } else {
+                                "没有匹配的目录"
+                            };
+                            ui.label(egui::RichText::new(label).weak());
+                        }
+                        for project in &projects {
+                            self.project_row(ui, project, sorting_allowed);
+                        }
+                    });
+            });
+        let width = panel.response.rect.width();
+        if (width - self.state.sidebar_width).abs() > 1.0 {
+            self.state.sidebar_width = width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        }
+        if root_ui.ctx().input(|input| input.pointer.any_released()) {
+            self.dragged_project_id = None;
+            self.persist();
+            self.rebuild_tray();
+        }
+    }
+
+    fn project_row(&mut self, ui: &mut egui::Ui, project: &Project, sorting_allowed: bool) {
+        let size = Vec2::new(ui.available_width(), 32.0);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        let active = self.state.active_project_id.as_deref() == Some(project.id.as_str());
+        let dragging = self.dragged_project_id.as_deref() == Some(project.id.as_str());
+        let visuals = ui.visuals();
+        let background = if active {
+            visuals.selection.bg_fill
+        } else if response.hovered() {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, 6.0, background);
+        ui.painter().text(
+            rect.left_center() + Vec2::new(8.0, 0.0),
+            Align2::LEFT_CENTER,
+            "[ ]",
+            FontId::proportional(13.0),
+            visuals.text_color(),
+        );
+        ui.painter().text(
+            rect.left_center() + Vec2::new(34.0, 0.0),
+            Align2::LEFT_CENTER,
+            &project.name,
+            FontId::proportional(14.0),
+            visuals.text_color(),
+        );
+        if response.hovered() {
+            ui.painter().text(
+                rect.right_center() - Vec2::new(8.0, 0.0),
+                Align2::RIGHT_CENTER,
+                if sorting_allowed { "::" } else { "" },
+                FontId::monospace(12.0),
+                visuals.weak_text_color(),
+            );
+        }
+
+        if sorting_allowed && response.drag_started() {
+            self.dragged_project_id = Some(project.id.clone());
+        }
+        if sorting_allowed && response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if sorting_allowed {
+            let pointer = ui.ctx().input(|input| {
+                input
+                    .pointer
+                    .interact_pos()
+                    .filter(|_| input.pointer.primary_down())
+            });
+            if let (Some(source_id), Some(pointer)) =
+                (self.dragged_project_id.clone(), pointer)
+            {
+                if source_id != project.id && rect.contains(pointer) {
+                    let insert_after = pointer.y > rect.center().y;
+                    if self.reorder_project(&source_id, &project.id, insert_after) {
+                        self.rebuild_tray();
+                    }
+                }
+            }
+        }
+        if response.clicked() && !response.dragged() {
+            self.select_project(project.id.clone());
+        }
+        if dragging {
+            ui.painter().rect_stroke(
+                rect.shrink(1.0),
+                6.0,
+                egui::Stroke::new(1.0, visuals.selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+
+    fn main_panel(&mut self, root_ui: &mut egui::Ui) {
+        CentralPanel::default().show(root_ui, |ui| {
+            ui.add_space(12.0);
+            let Some(project) = self.active_project() else {
+                ui.heading("添加一个项目目录");
+                ui.add_space(6.0);
+                ui.label("在左侧添加目录，然后在此处快速打开系统终端。");
+                ui.add_space(10.0);
+                if ui.button("+ 添加目录").clicked() {
+                    self.add_project();
+                }
+                return;
+            };
+
+            ui.heading(&project.name);
+            ui.label(egui::RichText::new(&project.path).small().weak());
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label("打开终端");
+            ui.add_space(6.0);
+
+            let profiles = self.state.shell_profiles.clone();
+            ui.horizontal_wrapped(|ui| {
+                for profile in profiles {
+                    let label = if profile.id == self.state.default_shell_profile_id {
+                        format!("默认：{}", profile.name)
+                    } else {
+                        profile.name.clone()
+                    };
+                    let response = ui.add_enabled(profile.detected, egui::Button::new(label));
+                    if response.clicked() {
+                        self.launch_profile(&project, &profile);
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("终端将在独立的系统窗口中运行，不由 mutishell 托管。")
+                    .small()
+                    .weak(),
+            );
+        });
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let mut open = self.settings_open;
+        let mut apply = false;
+        let mut cancel = false;
+        let mut project_to_remove: Option<String> = None;
+        egui::Window::new("设置")
+            .open(&mut open)
+            .default_size(Vec2::new(980.0, 640.0))
+            .min_width(760.0)
+            .vscroll(true)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Shell 配置和项目目录管理").small().weak());
+                ui.add_space(8.0);
+                ui.columns(2, |columns| {
+                    columns[0].heading("Shell Profiles");
+                    columns[0].add_space(4.0);
+                    for index in 0..self.settings_profiles.len() {
+                        let mut profile = self.settings_profiles[index].clone();
+                        let profile_id = profile.id.clone();
+                        columns[0].group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.radio_value(
+                                    &mut self.settings_default_profile_id,
+                                    profile_id.clone(),
+                                    "默认",
+                                );
+                                ui.strong(&profile.name);
+                                let availability = if profile.detected { "可用" } else { "未找到" };
+                                let color = if profile.detected {
+                                    Color32::from_rgb(55, 178, 105)
+                                } else {
+                                    Color32::from_rgb(210, 80, 70)
+                                };
+                                ui.colored_label(color, availability);
+                            });
+                            ui.add(
+                                egui::TextEdit::singleline(&mut profile.executable)
+                                    .desired_width(f32::INFINITY),
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.button("检测").clicked() {
+                                    profile.detected = executable_exists(&profile.executable);
+                                }
+                                if ui.button("恢复默认").clicked() {
+                                    if let Some(default_profile) = default_shell_profiles()
+                                        .into_iter()
+                                        .find(|item| item.id == profile.id)
+                                    {
+                                        profile = default_profile;
+                                    }
+                                }
+                            });
+                        });
+                        columns[0].add_space(6.0);
+                        self.settings_profiles[index] = profile;
+                    }
+
+                    columns[1].heading("项目目录");
+                    columns[1].add_space(4.0);
+                    let projects = self.state.projects.clone();
+                    for project in projects {
+                        columns[1].group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.strong(&project.name);
+                                    ui.label(egui::RichText::new(&project.path).small().weak());
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("移除").clicked() {
+                                            project_to_remove = Some(project.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                        columns[1].add_space(6.0);
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("完成").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if let Some(project_id) = project_to_remove {
+            self.remove_project(&project_id);
+        }
+        if apply {
+            for profile in &mut self.settings_profiles {
+                profile.executable = profile.executable.trim().to_string();
+                profile.detected = executable_exists(&profile.executable);
+            }
+            self.state.shell_profiles = self.settings_profiles.clone();
+            if self
+                .state
+                .shell_profiles
+                .iter()
+                .any(|profile| {
+                    profile.id == self.settings_default_profile_id && profile.detected
+                })
+            {
+                self.state.default_shell_profile_id =
+                    self.settings_default_profile_id.clone();
+            } else {
+                self.state.default_shell_profile_id =
+                    default_shell_id(&self.state.shell_profiles);
+            }
+            self.persist();
+            self.rebuild_tray();
+            open = false;
+        }
+        if cancel {
+            open = false;
+        }
+        self.settings_open = open;
+    }
+
+    fn notice_bar(&mut self, root_ui: &mut egui::Ui) {
+        let Some(notice) = self.notice.clone() else {
+            return;
+        };
+        Panel::bottom("notice-bar").show(root_ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(notice);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("关闭").clicked() {
+                        self.notice = None;
+                    }
+                });
+            });
+        });
     }
 }
 
-fn shutdown_terminal(mut terminal: TerminalProcess) {
-    terminal.alive.store(false, Ordering::SeqCst);
-    let _ = terminal.child.kill();
-    let _ = terminal.child.wait();
+impl eframe::App for MutishellApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.process_tray_events(ctx);
+        if ctx.input(|input| input.viewport().minimized == Some(true))
+            && !self.minimized_to_tray
+        {
+            self.minimized_to_tray = true;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
+        self.top_bar(root_ui);
+        self.sidebar(root_ui);
+        self.notice_bar(root_ui);
+        self.main_panel(root_ui);
+        self.settings_window(&ctx);
+    }
 }
 
-#[tauri::command]
+pub fn run() {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1120.0, 720.0])
+            .with_min_inner_size([860.0, 560.0]),
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
+    eframe::run_native(
+        "mutishell",
+        options,
+        Box::new(|creation_context| Ok(Box::new(MutishellApp::new(creation_context)))),
+    )
+    .expect("failed to run mutishell");
+}
+
+fn build_tray(projects: &[Project]) -> AppResult<TrayHandle> {
+    let menu = Menu::new();
+    if projects.is_empty() {
+        let empty = MenuItem::with_id("no-projects", "暂无项目目录", false, None);
+        menu.append(&empty)
+            .map_err(|error| format!("创建托盘菜单失败：{error}"))?;
+    } else {
+        for project in projects {
+            let item = MenuItem::with_id(
+                format!("open-project:{}", project.id),
+                &project.name,
+                true,
+                None,
+            );
+            menu.append(&item)
+                .map_err(|error| format!("创建托盘菜单失败：{error}"))?;
+        }
+    }
+    menu.append(&PredefinedMenuItem::separator())
+        .map_err(|error| format!("创建托盘菜单失败：{error}"))?;
+    let show = MenuItem::with_id("show-window", "显示 mutishell", true, None);
+    let quit = MenuItem::with_id("quit-application", "退出", true, None);
+    menu.append(&show)
+        .and_then(|_| menu.append(&quit))
+        .map_err(|error| format!("创建托盘菜单失败：{error}"))?;
+
+    let icon = make_tray_icon()?;
+    let icon = TrayIconBuilder::new()
+        .with_tooltip("mutishell")
+        .with_icon(icon)
+        .with_menu(Box::new(menu))
+        .build()
+        .map_err(|error| format!("创建托盘图标失败：{error}"))?;
+    Ok(TrayHandle { _icon: icon })
+}
+
+fn make_tray_icon() -> AppResult<Icon> {
+    const SIZE: usize = 32;
+    let mut pixels = vec![0_u8; SIZE * SIZE * 4];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let index = (y * SIZE + x) * 4;
+            let border = x < 2 || x >= SIZE - 2 || y < 2 || y >= SIZE - 2;
+            let prompt = (x >= 8 && x <= 12 && y >= 9 && y <= 13)
+                || (x >= 12 && x <= 16 && y >= 13 && y <= 17)
+                || (x >= 18 && x <= 24 && y >= 21 && y <= 23);
+            let (red, green, blue) = if border {
+                (72, 163, 184)
+            } else if prompt {
+                (238, 247, 249)
+            } else {
+                (23, 37, 47)
+            };
+            pixels[index] = red;
+            pixels[index + 1] = green;
+            pixels[index + 2] = blue;
+            pixels[index + 3] = 255;
+        }
+    }
+    Icon::from_rgba(pixels, SIZE as u32, SIZE as u32)
+        .map_err(|error| format!("生成托盘图标失败：{error}"))
+}
+
 fn load_app_state() -> AppResult<AppStateFile> {
     let path = state_file_path()?;
     if !path.exists() {
         return Ok(default_app_state());
     }
-
     let content = fs::read_to_string(&path)
-        .map_err(|err| format!("Failed to read state file '{}': {err}", path.display()))?;
+        .map_err(|error| format!("读取配置失败 '{}': {error}", path.display()))?;
     let mut state: AppStateFile = serde_json::from_str(&content)
-        .map_err(|err| format!("Failed to parse state file '{}': {err}", path.display()))?;
-
-    let detected_profiles = default_shell_profiles();
-    for profile in &mut state.shell_profiles {
-        if let Some(detected) = detected_profiles.iter().find(|item| item.id == profile.id) {
-            if profile.executable.trim().is_empty() {
-                profile.executable = detected.executable.clone();
-            }
-        }
-        profile.detected = executable_exists(&profile.executable);
+        .map_err(|error| format!("解析配置失败 '{}': {error}", path.display()))?;
+    reconcile_profiles(&mut state);
+    if !state
+        .active_project_id
+        .as_ref()
+        .is_some_and(|id| state.projects.iter().any(|project| &project.id == id))
+    {
+        state.active_project_id = state.projects.first().map(|project| project.id.clone());
     }
-
-    if state.shell_profiles.is_empty() {
-        state.shell_profiles = detected_profiles;
-        state.default_shell_profile_id = default_shell_id(&state.shell_profiles);
-    } else {
-        for detected in detected_profiles {
-            if !state.shell_profiles.iter().any(|item| item.id == detected.id) {
-                state.shell_profiles.push(detected);
-            }
-        }
-        if !state
-            .shell_profiles
-            .iter()
-            .any(|item| item.id == state.default_shell_profile_id && item.detected)
-        {
-            state.default_shell_profile_id = default_shell_id(&state.shell_profiles);
-        }
-    }
-
+    state.version = 2;
     Ok(state)
 }
 
-#[tauri::command]
-fn save_app_state(state: AppStateFile) -> AppResult<()> {
+fn save_app_state(state: &AppStateFile) -> AppResult<()> {
     let path = state_file_path()?;
-    ensure_parent_dir(&path)?;
-    let content = serde_json::to_string_pretty(&state)
-        .map_err(|err| format!("Failed to serialize state: {err}"))?;
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("创建配置目录失败 '{}': {error}", parent.display()))?;
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("序列化配置失败：{error}"))?;
     fs::write(&path, content)
-        .map_err(|err| format!("Failed to write state file '{}': {err}", path.display()))
-}
-
-#[tauri::command]
-fn get_shell_profiles() -> Vec<ShellProfile> {
-    default_shell_profiles()
-}
-
-#[tauri::command]
-fn check_executable_path(path: String) -> bool {
-    executable_exists(&path)
-        || normalize_git_bash_executable(&clean_executable_path(&path))
-            .is_some_and(|bash| executable_exists(&bash))
-}
-
-#[tauri::command]
-fn get_home_dir() -> AppResult<String> {
-    dirs::home_dir()
-        .map(path_to_string)
-        .ok_or_else(|| "Unable to locate home directory".to_string())
-}
-
-#[tauri::command]
-fn open_path_in_explorer(path: String) -> AppResult<()> {
-    let normalized = normalize_existing_dir(&path)?;
-    Command::new("explorer")
-        .arg(normalized)
-        .spawn()
-        .map_err(|err| format!("Failed to open explorer: {err}"))?;
-    Ok(())
-}
-
-fn save_clipboard_image(bytes: Vec<u8>, extension: String) -> AppResult<String> {
-    if bytes.is_empty() {
-        return Err("Clipboard image is empty".to_string());
-    }
-
-    let extension = clean_image_extension(&extension)?;
-    let dir = paste_temp_file_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|err| format!("Failed to create clipboard file cache directory: {err}"))?;
-
-    let path = dir.join(format!(
-        "clipboard-{}-{}.{}",
-        Utc::now().format("%Y%m%d-%H%M%S%.3f"),
-        Uuid::new_v4(),
-        extension
-    ));
-    fs::write(&path, bytes)
-        .map_err(|err| format!("Failed to save clipboard image '{}': {err}", path.display()))?;
-    Ok(path_to_string(path))
-}
-
-#[tauri::command]
-fn clear_paste_temp_files() -> AppResult<usize> {
-    let dir = paste_temp_file_dir();
-    if !dir.exists() {
-        return Ok(0);
-    }
-
-    let mut removed = 0;
-    let entries = fs::read_dir(&dir)
-        .map_err(|err| format!("Failed to read paste temp file directory: {err}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("Failed to read cache entry: {err}"))?;
-        let path = entry.path();
-        if path.is_file() && is_supported_cached_file_path(&path) {
-            fs::remove_file(&path)
-                .map_err(|err| format!("Failed to remove '{}': {err}", path.display()))?;
-            removed += 1;
-        }
-    }
-
-    Ok(removed)
-}
-
-#[tauri::command]
-fn save_system_clipboard_files() -> AppResult<Vec<String>> {
-    save_system_clipboard_files_impl()
-}
-
-#[tauri::command]
-fn terminal_create(
-    app: AppHandle,
-    registry: tauri::State<'_, TerminalRegistry>,
-    request: TerminalCreateRequest,
-) -> AppResult<TerminalCreated> {
-    let terminal_id = request
-        .terminal_id
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let terminal_instance_id = request
-        .terminal_instance_id
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let default_profile = default_shell_profiles()
-        .into_iter()
-        .find(|item| item.id == request.shell_profile_id)
-        .ok_or_else(|| format!("Unknown shell profile '{}'", request.shell_profile_id))?;
-    let profile = request
-        .shell_profile
-        .filter(|profile| profile.id == request.shell_profile_id)
-        .unwrap_or(default_profile);
-
-    let cwd = normalize_existing_dir(&request.cwd)?;
-    let launch = resolve_shell_launch(&profile);
-    let executable = launch.executable;
-    if !executable_exists(&executable) {
-        return Err(format!(
-            "Shell '{}' was not found at '{}'",
-            profile.name, executable
-        ));
-    }
-
-    registry.close(&terminal_id)?;
-
-    let pty_system = native_pty_system();
-    let pty_pair = pty_system
-        .openpty(PtySize {
-            rows: request.rows.unwrap_or(30).max(1),
-            cols: request.cols.unwrap_or(100).max(1),
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|err| format!("Failed to open PTY: {err}"))?;
-
-    let mut command = CommandBuilder::new(&executable);
-    for arg in &launch.args {
-        command.arg(arg);
-    }
-    command.cwd(&cwd);
-    command.env("TERM", "xterm-256color");
-
-    let child = pty_pair
-        .slave
-        .spawn_command(command)
-        .map_err(|err| format!("Failed to spawn '{}': {err}", profile.name))?;
-    let pid = child.process_id();
-    let writer = pty_pair
-        .master
-        .take_writer()
-        .map_err(|err| format!("Failed to open terminal writer: {err}"))?;
-    let mut reader = pty_pair
-        .master
-        .try_clone_reader()
-        .map_err(|err| format!("Failed to open terminal reader: {err}"))?;
-
-    let alive = Arc::new(AtomicBool::new(true));
-    let alive_for_reader = alive.clone();
-    let app_for_reader = app.clone();
-    let terminal_id_for_reader = terminal_id.clone();
-    let terminal_instance_id_for_reader = terminal_instance_id.clone();
-    let terminal_id_for_cleanup = terminal_id.clone();
-    let terminal_instance_id_for_cleanup = terminal_instance_id.clone();
-
-    thread::Builder::new()
-        .name(format!("terminal-reader-{terminal_id}"))
-        .spawn(move || {
-            let mut buffer = [0_u8; 32768];
-            while alive_for_reader.load(Ordering::SeqCst) {
-                match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(size) => {
-                        let _ = app_for_reader.emit(
-                            "terminal://data",
-                            TerminalDataEvent {
-                                terminal_id: terminal_id_for_reader.clone(),
-                                instance_id: terminal_instance_id_for_reader.clone(),
-                                data: buffer[..size].to_vec(),
-                            },
-                        );
-                    }
-                    Err(_) => break,
-                }
-            }
-
-            let _ = app_for_reader.emit(
-                "terminal://exit",
-                TerminalExitEvent {
-                    terminal_id: terminal_id_for_reader,
-                    instance_id: terminal_instance_id_for_reader,
-                },
-            );
-            let registry = app_for_reader.state::<TerminalRegistry>();
-            let _ = registry
-                .remove_instance(&terminal_id_for_cleanup, &terminal_instance_id_for_cleanup);
-        })
-        .map_err(|err| format!("Failed to start terminal reader: {err}"))?;
-
-    registry.insert(
-        terminal_id.clone(),
-        TerminalProcess {
-            instance_id: terminal_instance_id.clone(),
-            writer,
-            child,
-            master: pty_pair.master,
-            alive,
-        },
-    )?;
-
-    Ok(TerminalCreated {
-        id: terminal_id,
-        instance_id: terminal_instance_id,
-        pid,
-    })
-}
-
-#[tauri::command]
-fn terminal_write(
-    registry: tauri::State<'_, TerminalRegistry>,
-    terminal_id: String,
-    data: String,
-) -> AppResult<()> {
-    registry.write(&terminal_id, &data)
-}
-
-#[tauri::command]
-fn terminal_resize(
-    registry: tauri::State<'_, TerminalRegistry>,
-    terminal_id: String,
-    cols: u16,
-    rows: u16,
-) -> AppResult<()> {
-    registry.resize(&terminal_id, cols, rows)
-}
-
-#[tauri::command]
-fn terminal_close(
-    registry: tauri::State<'_, TerminalRegistry>,
-    terminal_id: String,
-) -> AppResult<()> {
-    registry.close(&terminal_id)
-}
-
-#[tauri::command]
-fn terminal_close_instance(
-    registry: tauri::State<'_, TerminalRegistry>,
-    terminal_id: String,
-    instance_id: String,
-) -> AppResult<()> {
-    registry.close_instance(&terminal_id, &instance_id)
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .manage(TerminalRegistry::default())
-        .invoke_handler(tauri::generate_handler![
-            load_app_state,
-            save_app_state,
-            get_shell_profiles,
-            check_executable_path,
-            get_home_dir,
-            open_path_in_explorer,
-            clear_paste_temp_files,
-            save_system_clipboard_files,
-            terminal_create,
-            terminal_write,
-            terminal_resize,
-            terminal_close,
-            terminal_close_instance,
-        ])
-        .setup(|app| {
-            let app_handle = app.handle().clone();
-            app.listen("tauri://close-requested", move |_| {
-                let registry = app_handle.state::<TerminalRegistry>();
-                let _ = registry.close_all();
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .map_err(|error| format!("写入配置失败 '{}': {error}", path.display()))
 }
 
 fn default_app_state() -> AppStateFile {
     let shell_profiles = default_shell_profiles();
     AppStateFile {
-        version: 1,
+        version: 2,
         projects: Vec::new(),
-        tabs: Vec::new(),
         active_project_id: None,
-        active_tab_by_project: HashMap::new(),
         default_shell_profile_id: default_shell_id(&shell_profiles),
         shell_profiles,
-        sidebar_width: default_sidebar_width(),
+        sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         theme: default_theme(),
-        right_click_paste: false,
-        copy_on_select: false,
-        terminal_font_size: default_terminal_font_size(),
     }
 }
 
-fn default_sidebar_width() -> f64 {
-    172.0
+fn reconcile_profiles(state: &mut AppStateFile) {
+    let detected_profiles = default_shell_profiles();
+    for profile in &mut state.shell_profiles {
+        if profile.executable.trim().is_empty() {
+            if let Some(default_profile) = detected_profiles
+                .iter()
+                .find(|default_profile| default_profile.id == profile.id)
+            {
+                profile.executable = default_profile.executable.clone();
+            }
+        }
+        profile.detected = executable_exists(&profile.executable);
+    }
+    for profile in detected_profiles {
+        if !state
+            .shell_profiles
+            .iter()
+            .any(|existing| existing.id == profile.id)
+        {
+            state.shell_profiles.push(profile);
+        }
+    }
+    if !state
+        .shell_profiles
+        .iter()
+        .any(|profile| profile.id == state.default_shell_profile_id && profile.detected)
+    {
+        state.default_shell_profile_id = default_shell_id(&state.shell_profiles);
+    }
+    state.sidebar_width = state
+        .sidebar_width
+        .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+    if state.theme != "light" {
+        state.theme = "dark".to_string();
+    }
+}
+
+fn default_sidebar_width() -> f32 {
+    DEFAULT_SIDEBAR_WIDTH
 }
 
 fn default_theme() -> String {
     "dark".to_string()
-}
-
-fn default_terminal_font_size() -> f64 {
-    13.0
 }
 
 fn default_shell_profiles() -> Vec<ShellProfile> {
@@ -638,7 +849,7 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
             name: "Windows PowerShell".to_string(),
             executable: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string(),
             args: vec!["-NoLogo".to_string()],
-            icon: "square-terminal".to_string(),
+            icon: "powershell".to_string(),
             detected: false,
         },
         ShellProfile {
@@ -650,7 +861,7 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
             ])
             .unwrap_or_else(|| "pwsh.exe".to_string()),
             args: vec!["-NoLogo".to_string()],
-            icon: "terminal".to_string(),
+            icon: "pwsh".to_string(),
             detected: false,
         },
         ShellProfile {
@@ -658,22 +869,21 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
             name: "Command Prompt".to_string(),
             executable: "C:\\Windows\\System32\\cmd.exe".to_string(),
             args: Vec::new(),
-            icon: "panel-top".to_string(),
+            icon: "cmd".to_string(),
             detected: false,
         },
         ShellProfile {
             id: "git-bash".to_string(),
             name: "Git Bash".to_string(),
             executable: find_first_existing(&[
-                "C:\\Program Files\\Git\\bin\\bash.exe",
-                "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-                "D:\\Git\\bin\\bash.exe",
-                "D:\\Program Files\\Git\\bin\\bash.exe",
-                "D:\\Program Files (x86)\\Git\\bin\\bash.exe",
+                "C:\\Program Files\\Git\\git-bash.exe",
+                "C:\\Program Files (x86)\\Git\\git-bash.exe",
+                "D:\\soft\\Git\\git-bash.exe",
+                "D:\\Git\\git-bash.exe",
             ])
-            .unwrap_or_else(|| "C:\\Program Files\\Git\\bin\\bash.exe".to_string()),
-            args: vec!["--login".to_string(), "-i".to_string()],
-            icon: "git-branch".to_string(),
+            .unwrap_or_else(|| "C:\\Program Files\\Git\\git-bash.exe".to_string()),
+            args: Vec::new(),
+            icon: "git-bash".to_string(),
             detected: false,
         },
         ShellProfile {
@@ -681,118 +891,89 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
             name: "WSL".to_string(),
             executable: "C:\\Windows\\System32\\wsl.exe".to_string(),
             args: Vec::new(),
-            icon: "box".to_string(),
+            icon: "wsl".to_string(),
             detected: false,
         },
     ];
-
     for profile in &mut profiles {
         profile.detected = executable_exists(&profile.executable);
     }
-
     profiles
 }
 
 fn default_shell_id(profiles: &[ShellProfile]) -> String {
     profiles
         .iter()
-        .find(|profile| profile.id == "powershell" && profile.detected)
+        .find(|profile| profile.id == "pwsh" && profile.detected)
+        .or_else(|| profiles.iter().find(|profile| profile.id == "powershell" && profile.detected))
         .or_else(|| profiles.iter().find(|profile| profile.detected))
         .map(|profile| profile.id.clone())
         .unwrap_or_else(|| "powershell".to_string())
 }
 
+fn launch_external_terminal(project: &Project, profile: &ShellProfile) -> AppResult<()> {
+    let cwd = normalize_existing_dir(&project.path)?;
+    let executable = clean_executable_path(&profile.executable);
+    if !executable_exists(&executable) {
+        return Err(format!("未找到可执行文件 '{}'", profile.executable));
+    }
+    let mut command = Command::new(&executable);
+    command.args(&profile.args).current_dir(cwd);
+    configure_external_terminal_command(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("无法启动 {}：{error}", profile.name))?;
+    Ok(())
+}
+
+fn open_path_in_explorer(path: &str) -> AppResult<()> {
+    let path = normalize_existing_dir(path)?;
+    Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("无法打开资源管理器：{error}"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_external_terminal_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(0x0000_0010);
+}
+
+#[cfg(not(windows))]
+fn configure_external_terminal_command(_command: &mut Command) {}
+
 fn state_file_path() -> AppResult<PathBuf> {
     let base_dir = dirs::config_dir()
         .or_else(dirs::data_local_dir)
-        .ok_or_else(|| "Unable to locate user config directory".to_string())?;
+        .ok_or_else(|| "无法定位用户配置目录".to_string())?;
     Ok(base_dir.join(APP_DIR_NAME).join(STATE_FILE_NAME))
 }
 
-fn ensure_parent_dir(path: &Path) -> AppResult<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    fs::create_dir_all(parent)
-        .map_err(|err| format!("Failed to create config directory '{}': {err}", parent.display()))
-}
-
 fn normalize_existing_dir(path: &str) -> AppResult<String> {
-    let path = shellexpand_home(path);
-    let path = PathBuf::from(path);
-    let canonical = fs::canonicalize(&path)
-        .map_err(|err| format!("Directory '{}' does not exist: {err}", path.display()))?;
+    let input = expand_home(path);
+    let input_path = PathBuf::from(input);
+    let canonical = fs::canonicalize(&input_path)
+        .map_err(|error| format!("目录 '{}' 不存在：{error}", input_path.display()))?;
     if !canonical.is_dir() {
-        return Err(format!("'{}' is not a directory", canonical.display()));
+        return Err(format!("'{}' 不是目录", canonical.display()));
     }
-    Ok(clean_windows_path(&path_to_string(canonical)))
+    Ok(clean_windows_path(&canonical.to_string_lossy()))
 }
 
-fn shellexpand_home(path: &str) -> String {
+fn expand_home(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return path_to_string(home.join(rest));
+            return home.join(rest).to_string_lossy().to_string();
         }
     }
     path.to_string()
 }
 
-fn path_to_string(path: PathBuf) -> String {
-    path.to_string_lossy().to_string()
-}
-
 fn clean_executable_path(path: &str) -> String {
     clean_windows_path(path.trim().trim_matches('"'))
-}
-
-struct ShellLaunch {
-    executable: String,
-    args: Vec<String>,
-}
-
-fn resolve_shell_launch(profile: &ShellProfile) -> ShellLaunch {
-    let executable = clean_executable_path(&profile.executable);
-    let args = if profile.id == "git-bash" {
-        ensure_git_bash_args(&profile.args)
-    } else {
-        profile.args.clone()
-    };
-
-    ShellLaunch {
-        executable: normalize_git_bash_executable(&executable).unwrap_or(executable),
-        args,
-    }
-}
-
-fn ensure_git_bash_args(args: &[String]) -> Vec<String> {
-    if args.iter().any(|arg| arg == "--login") && args.iter().any(|arg| arg == "-i") {
-        return args.to_vec();
-    }
-
-    let mut next = args.to_vec();
-    if !next.iter().any(|arg| arg == "--login") {
-        next.push("--login".to_string());
-    }
-    if !next.iter().any(|arg| arg == "-i") {
-        next.push("-i".to_string());
-    }
-    next
-}
-
-fn normalize_git_bash_executable(executable: &str) -> Option<String> {
-    let path = Path::new(executable);
-    let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
-    if file_name != "git-bash.exe" {
-        return None;
-    }
-
-    let git_root = path.parent()?;
-    let bash = git_root.join("bin").join("bash.exe");
-    if bash.exists() {
-        return Some(path_to_string(bash));
-    }
-
-    None
 }
 
 fn clean_windows_path(path: &str) -> String {
@@ -805,239 +986,25 @@ fn clean_windows_path(path: &str) -> String {
     path.to_string()
 }
 
-fn clean_image_extension(extension: &str) -> AppResult<String> {
-    let extension = extension
-        .trim()
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
-    match extension.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => Ok(extension),
-        _ => Err(format!("Unsupported clipboard image type '{extension}'")),
+fn executable_exists(executable: &str) -> bool {
+    let executable = clean_executable_path(executable);
+    if executable.is_empty() {
+        return false;
     }
-}
-
-fn paste_temp_file_dir() -> PathBuf {
-    std::env::temp_dir()
-        .join(APP_DIR_NAME)
-        .join("paste-temp")
-}
-
-fn is_supported_cached_file_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            clean_image_extension(extension).is_ok()
-        })
-}
-
-#[cfg(windows)]
-fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
-    use windows_sys::Win32::{
-        Foundation::HWND,
-        System::DataExchange::{
-            CloseClipboard, OpenClipboard, RegisterClipboardFormatW,
-        },
+    if Path::new(&executable).exists() {
+        return true;
+    }
+    let Ok(path_env) = std::env::var("PATH") else {
+        return false;
     };
-
-    struct ClipboardGuard;
-    impl Drop for ClipboardGuard {
-        fn drop(&mut self) {
-            unsafe {
-                CloseClipboard();
-            }
-        }
-    }
-
-    fn registered_format(name: &str) -> AppResult<u32> {
-        let mut wide: Vec<u16> = name.encode_utf16().collect();
-        wide.push(0);
-        let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
-        if format == 0 {
-            return Err(format!("Failed to register clipboard format '{name}'"));
-        }
-        Ok(format)
-    }
-
-    let mut opened = false;
-    for _ in 0..5 {
-        if unsafe { OpenClipboard(0 as HWND) } != 0 {
-            opened = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    if !opened {
-        return Err("Failed to open system clipboard".to_string());
-    }
-    let clipboard_input = {
-        let _guard = ClipboardGuard;
-
-        let file_paths = unsafe { read_clipboard_file_drop() };
-        if !file_paths.is_empty() {
-            return Ok(file_paths);
-        }
-
-        let mut image = None;
-        for image_format in CLIPBOARD_IMAGE_FORMATS {
-            let clipboard_format = registered_format(image_format.name)?;
-            let bytes = unsafe { read_clipboard_memory_format(clipboard_format)? };
-            if let Some(bytes) = bytes {
-                image = Some(ClipboardFileInput::Image {
-                    bytes,
-                    extension: image_format.extension,
-                });
-                break;
-            }
-        }
-
-        if let Some(image) = image {
-            image
-        } else {
-            let dib_bytes = unsafe { read_clipboard_memory_format(8)? };
-            if let Some(bytes) = dib_bytes {
-                ClipboardFileInput::Image {
-                    bytes: dib_to_bmp(bytes),
-                    extension: "bmp",
-                }
-            } else {
-                let dib_v5_bytes = unsafe { read_clipboard_memory_format(17)? };
-                if let Some(bytes) = dib_v5_bytes {
-                    ClipboardFileInput::Image {
-                        bytes: dib_to_bmp(bytes),
-                        extension: "bmp",
-                    }
-                } else {
-                    ClipboardFileInput::Paths(Vec::new())
-                }
-            }
-        }
-    };
-
-    match clipboard_input {
-        ClipboardFileInput::Paths(paths) => Ok(paths),
-        ClipboardFileInput::Image { bytes, extension } => {
-            save_clipboard_image(bytes, extension.to_string()).map(|path| vec![path])
-        }
-    }
-}
-
-#[cfg(windows)]
-unsafe fn read_clipboard_memory_format(format: u32) -> AppResult<Option<Vec<u8>>> {
-    use std::ffi::c_void;
-    use windows_sys::Win32::{
-        System::{
-            DataExchange::{GetClipboardData, IsClipboardFormatAvailable},
-            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
-        },
-    };
-
-    if IsClipboardFormatAvailable(format) == 0 {
-        return Ok(None);
-    }
-
-    let handle = GetClipboardData(format);
-    if handle.is_null() {
-        return Ok(None);
-    }
-
-    let size = GlobalSize(handle as *mut c_void);
-    if size == 0 {
-        return Ok(None);
-    }
-    if size > MAX_CLIPBOARD_IMAGE_BYTES {
-        return Err(format!(
-            "Clipboard image is too large: {:.1} MB, maximum is 20 MB",
-            size as f64 / 1024.0 / 1024.0,
-        ));
-    }
-
-    let pointer = GlobalLock(handle as *mut c_void);
-    if pointer.is_null() {
-        return Ok(None);
-    }
-
-    let bytes = std::slice::from_raw_parts(pointer as *const u8, size).to_vec();
-    GlobalUnlock(handle as *mut c_void);
-
-    Ok(Some(bytes))
-}
-
-#[cfg(windows)]
-fn dib_to_bmp(dib: Vec<u8>) -> Vec<u8> {
-    if dib.len() < 16 {
-        return dib;
-    }
-
-    let dib_header_size = u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]]) as usize;
-    let bit_count = u16::from_le_bytes([dib[14], dib[15]]);
-    let color_table_size = if bit_count <= 8 && dib_header_size >= 40 && dib.len() >= 36 {
-        let colors_used = u32::from_le_bytes([dib[32], dib[33], dib[34], dib[35]]) as usize;
-        let color_count = if colors_used > 0 {
-            colors_used
-        } else {
-            1_usize << bit_count
-        };
-        color_count.saturating_mul(4)
+    let executable_path = Path::new(&executable);
+    let candidates = if executable_path.extension().is_some() {
+        vec![executable]
     } else {
-        0
+        vec![format!("{executable}.exe"), executable]
     };
-    let pixel_offset = 14_usize
-        .saturating_add(dib_header_size)
-        .saturating_add(color_table_size);
-    let file_size = 14_usize.saturating_add(dib.len());
-
-    let mut bmp = Vec::with_capacity(file_size);
-    bmp.extend_from_slice(b"BM");
-    bmp.extend_from_slice(&(file_size as u32).to_le_bytes());
-    bmp.extend_from_slice(&[0, 0, 0, 0]);
-    bmp.extend_from_slice(&(pixel_offset as u32).to_le_bytes());
-    bmp.extend_from_slice(&dib);
-    bmp
-}
-
-#[cfg(windows)]
-unsafe fn read_clipboard_file_drop() -> Vec<String> {
-    use windows_sys::Win32::{
-        System::DataExchange::{GetClipboardData, IsClipboardFormatAvailable},
-        UI::Shell::{DragQueryFileW, HDROP},
-    };
-
-    const CF_HDROP: u32 = 15;
-
-    if IsClipboardFormatAvailable(CF_HDROP) == 0 {
-        return Vec::new();
-    }
-
-    let handle = GetClipboardData(CF_HDROP);
-    if handle.is_null() {
-        return Vec::new();
-    }
-
-    let drop_handle = handle as HDROP;
-    let count = DragQueryFileW(drop_handle, u32::MAX, std::ptr::null_mut(), 0);
-    let mut paths = Vec::new();
-
-    for index in 0..count {
-        let len = DragQueryFileW(drop_handle, index, std::ptr::null_mut(), 0);
-        if len == 0 {
-            continue;
-        }
-
-        let mut buffer = vec![0_u16; len as usize + 1];
-        let copied = DragQueryFileW(drop_handle, index, buffer.as_mut_ptr(), buffer.len() as u32);
-        if copied == 0 {
-            continue;
-        }
-
-        paths.push(String::from_utf16_lossy(&buffer[..copied as usize]));
-    }
-
-    paths
-}
-
-#[cfg(not(windows))]
-fn save_system_clipboard_files_impl() -> AppResult<Vec<String>> {
-    Ok(Vec::new())
+    std::env::split_paths(&path_env)
+        .any(|directory| candidates.iter().any(|candidate| directory.join(candidate).exists()))
 }
 
 fn find_first_existing(paths: &[&str]) -> Option<String> {
@@ -1047,39 +1014,64 @@ fn find_first_existing(paths: &[&str]) -> Option<String> {
         .map(|path| (*path).to_string())
 }
 
-fn executable_exists(executable: &str) -> bool {
-    let executable = clean_executable_path(executable);
-    let executable = executable.trim();
-    if executable.is_empty() {
-        return false;
-    }
-    if Path::new(executable).exists() {
-        return true;
-    }
-
-    let Ok(path_env) = std::env::var("PATH") else {
-        return false;
-    };
-
-    let path = Path::new(executable);
-    let candidates: Vec<String> = if path.extension().is_some() {
-        vec![executable.to_string()]
-    } else {
-        vec![format!("{executable}.exe"), executable.to_string()]
-    };
-
-    std::env::split_paths(&path_env).any(|dir| {
-        candidates
-            .iter()
-            .any(|candidate| dir.join(candidate).exists())
-    })
+fn path_base_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
-fn lock_error<T>(err: std::sync::PoisonError<T>) -> String {
-    format!("Internal state lock failed: {err}")
+fn make_id(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{prefix}-{nanos}")
 }
 
-#[allow(dead_code)]
 fn now_string() -> String {
-    Utc::now().to_rfc3339()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn install_chinese_font(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    for path in [
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+    ] {
+        if let Ok(bytes) = fs::read(path) {
+            fonts
+                .font_data
+                .insert("windows-cjk".to_string(), FontData::from_owned(bytes).into());
+            fonts
+                .families
+                .entry(FontFamily::Proportional)
+                .or_default()
+                .insert(0, "windows-cjk".to_string());
+            fonts
+                .families
+                .entry(FontFamily::Monospace)
+                .or_default()
+                .push("windows-cjk".to_string());
+            break;
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
+fn apply_theme(ctx: &egui::Context, theme: &str) {
+    let mut visuals = if theme == "light" {
+        egui::Visuals::light()
+    } else {
+        egui::Visuals::dark()
+    };
+    visuals.selection.bg_fill = Color32::from_rgb(56, 113, 130);
+    visuals.selection.stroke.color = Color32::from_rgb(98, 183, 202);
+    ctx.set_visuals(visuals);
 }
