@@ -651,13 +651,14 @@ impl MutishellApp {
 
 impl eframe::App for MutishellApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.process_tray_events(ctx);
         if ctx.input(|input| input.viewport().minimized == Some(true))
             && !self.minimized_to_tray
         {
             self.minimized_to_tray = true;
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         }
+        // Handle the menu last so its restore commands are not overwritten by a stale minimize state.
+        self.process_tray_events(ctx);
         ctx.request_repaint_after(Duration::from_millis(250));
     }
 
